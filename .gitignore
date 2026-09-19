@@ -7,3 +7,4 @@ samples/
 *.log
 __pycache__/
 .DS_Store
+travay/
