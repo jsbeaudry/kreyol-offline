@@ -1,0 +1,57 @@
+diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
+index 1c58d3a..af000b4 100644
+--- a/tools/mtmd/mtmd-helper-gen.cpp
++++ b/tools/mtmd/mtmd-helper-gen.cpp
+@@ -131,9 +131,13 @@ public:
+             return 1;
+         }
+ 
++        // "auto" is upstream Qwen3-TTS's language-free prefill (nothink, think_bos, think_eos), the form a
++        // model fine-tuned on a language outside the ten codec_language tokens was trained with
+         const std::string lang   = tts_resolve_lang((inp->lang && inp->lang[0]) ? inp->lang : "english");
+-        const llama_token c_lang = find_special_token(vocab, ("<|codec_language_" + lang + "|>").c_str());
+-        if (c_lang == LLAMA_TOKEN_NULL) {
++        const bool     auto_lang = lang == "auto";
++        const llama_token c_lang = auto_lang ? LLAMA_TOKEN_NULL
++                                             : find_special_token(vocab, ("<|codec_language_" + lang + "|>").c_str());
++        if (auto_lang ? c_nothink == LLAMA_TOKEN_NULL : c_lang == LLAMA_TOKEN_NULL) {
+             LOG_ERR("mtmd_helper_gen_audio: unknown language '%s'\n", lang.c_str());
+             return 1;
+         }
+@@ -175,10 +179,16 @@ public:
+ 
+         std::vector<std::vector<float>> prompt;
+         for (int i = 0; i < 3; i++) prompt.push_back(row(ids[(size_t) i]));
+-        prompt.push_back(sum_row(tts_pad, c_think));
+-        prompt.push_back(sum_row(tts_pad, c_think_b));
+-        prompt.push_back(sum_row(tts_pad, c_lang));
+-        prompt.push_back(sum_row(tts_pad, c_think_e));
++        if (auto_lang) {
++            prompt.push_back(sum_row(tts_pad, c_nothink));
++            prompt.push_back(sum_row(tts_pad, c_think_b));
++            prompt.push_back(sum_row(tts_pad, c_think_e));
++        } else {
++            prompt.push_back(sum_row(tts_pad, c_think));
++            prompt.push_back(sum_row(tts_pad, c_think_b));
++            prompt.push_back(sum_row(tts_pad, c_lang));
++            prompt.push_back(sum_row(tts_pad, c_think_e));
++        }
+         if (!speaker_embd.empty()) prompt.push_back(sum_vec(tts_pad, speaker_embd));
+         prompt.push_back(sum_row(tts_bos, codec_pad));
+         for (int i = 3; i < n_ids - 5; i++) prompt.push_back(sum_row(ids[(size_t) i], codec_pad));
+@@ -339,6 +349,7 @@ private:
+         c_think   = find_special_token(vocab, "<|codec_think|>");
+         c_think_b = find_special_token(vocab, "<|codec_think_bos|>");
+         c_think_e = find_special_token(vocab, "<|codec_think_eos|>");
++        c_nothink = find_special_token(vocab, "<|codec_nothink|>");  // optional: only --tts-lang auto needs it
+         tts_pad   = find_special_token(vocab, "<tts_pad>");
+         tts_bos   = find_special_token(vocab, "<tts_text_bos>");
+         tts_eos   = find_special_token(vocab, "<tts_text_eod>");
+@@ -429,6 +440,7 @@ private:
+     llama_token c_think    = LLAMA_TOKEN_NULL;
+     llama_token c_think_b  = LLAMA_TOKEN_NULL;
+     llama_token c_think_e  = LLAMA_TOKEN_NULL;
++    llama_token c_nothink  = LLAMA_TOKEN_NULL;
+     llama_token tts_pad    = LLAMA_TOKEN_NULL;
+     llama_token tts_bos    = LLAMA_TOKEN_NULL;
+     llama_token tts_eos    = LLAMA_TOKEN_NULL;

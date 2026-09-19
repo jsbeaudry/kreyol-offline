@@ -1,0 +1,9 @@
+# Built tools, downloaded models and audio stay out of git.
+whisper.cpp/
+llama.cpp/
+models/
+kreyol-tts/
+samples/
+*.log
+__pycache__/
+.DS_Store
