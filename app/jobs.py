@@ -215,10 +215,17 @@ def resume(jid):
 # ---------- transcription ----------
 
 def probe_seconds(path):
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
-                       capture_output=True, text=True)
     try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
         return float(r.stdout.strip())
+    except subprocess.TimeoutExpired:
+        # macOS asks before letting a program read Downloads, Documents or Desktop; when nobody can answer
+        # the question, reading the file simply never finishes.
+        raise UserError("Fichye a pran twò lontan pou l louvri. Sou Mac, bay pwogram ki lanse paj la aksè nan dosye "
+                        "sa a nan Réglages Système > Confidentialité et sécurité > Fichiers et dossiers. "
+                        "(Reading this file timed out: on a Mac, give the program that started the page access to "
+                        "that folder in System Settings > Privacy & Security > Files and Folders.)")
     except ValueError:
         raise UserError("Odyo sa a pa ka li: eseye yon lòt fichye. (This audio could not be read; try another file.)")
 
