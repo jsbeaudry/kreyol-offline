@@ -87,7 +87,7 @@ def convert(src, dst, rate, max_s=None):
     cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-vn", "-ar", str(rate), "-ac", "1",
            "-c:a", "pcm_s16le"]
     cmd += ["-t", str(max_s)] if max_s else []
-    r = subprocess.run(cmd + [dst], capture_output=True, text=True)
+    r = subprocess.run(cmd + [dst], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600)
     if r.returncode != 0 or not os.path.exists(dst):
         if os.path.exists(dst):
             os.remove(dst)
@@ -158,7 +158,7 @@ def encode(audio, fmt, speed=1.0, rate=TTS_RATE):
     out = os.path.join(TMP, f"enc-{uuid.uuid4().hex}.{fmt}")
     try:
         r = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "wav", "-i", "pipe:0", *filt, *args, out],
-                           input=wav, capture_output=True)
+                           input=wav, capture_output=True, timeout=600)
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg could not make {fmt}: {r.stderr.decode(errors='replace')[-300:]}")
         with open(out, "rb") as f:
@@ -172,7 +172,7 @@ def encode_file(src, dst, fmt):
     """A WAV on disk -> another format on disk (for long outputs that should not sit in memory)."""
     args, _ = FORMATS[fmt]
     r = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", src, *args, dst],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600)
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg could not make {fmt}: {r.stderr[-300:]}")
 
@@ -206,7 +206,8 @@ def speech_regions(wav, total_s):
 
     These are the line timestamps (see the module docstring for why Whisper's own are not used).
     """
-    r = subprocess.run([VAD_TOOL, "-vm", VAD_MODEL, "-f", wav], capture_output=True, text=True, timeout=1800)
+    r = subprocess.run([VAD_TOOL, "-vm", VAD_MODEL, "-f", wav], capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, timeout=1800)
     raw = [(float(a) / 100, float(b) / 100) for a, b in re.findall(r"start = ([\d.]+), end = ([\d.]+)", r.stdout)]
     merged = []
     for a, b in raw:
