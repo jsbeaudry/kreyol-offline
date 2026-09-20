@@ -29,6 +29,7 @@ import engine
 import jobs
 import openai_api
 import practice
+import settings
 from engine import UserError
 
 APP = os.path.dirname(os.path.abspath(__file__))
@@ -229,6 +230,9 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", r"/voices/([a-z0-9_]+)\.wav"): self.voice_clip,
             ("GET", r"/api/health"): self.health,
             ("GET", r"/api/lessons"): lambda q: practice.LESSONS,
+            ("GET", r"/api/settings"): lambda q: {"values": settings.all(), "fields": settings.describe()},
+            ("POST", r"/api/settings"): lambda q: {"values": self.with_json(lambda d: settings.update(d.get("values") or d))},
+            ("POST", r"/api/settings/reset"): lambda q: {"values": settings.reset()},
             ("GET", r"/api/bible"): self.bible_books,
             ("GET", r"/api/bible/([a-z0-9-]+)/(\d+)"): self.bible_chapter,
             ("GET", r"/api/browse"): lambda q: jobs.browse(q.get("path")),
@@ -247,6 +251,7 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", r"/api/jobs/([\w-]+)/segments"): lambda jid, q: self.with_json(lambda d: jobs.edit_segments(jid, d.get("changes") or [])),
             ("POST", r"/api/jobs/([\w-]+)/stop"): lambda jid, q: jobs.stop(jid),
             ("POST", r"/api/jobs/([\w-]+)/resume"): lambda jid, q: jobs.resume(jid),
+            ("POST", r"/api/jobs/([\w-]+)/redo"): lambda jid, q: jobs.redo(jid),
             ("POST", r"/api/jobs/([\w-]+)/reveal"): lambda jid, q: jobs.reveal(jid),
             ("POST", r"/api/reveal"): lambda q: jobs.reveal(),
             ("POST", r"/api/dataset"): lambda q: self.with_json(lambda d: jobs.export_dataset(d.get("jobs"), d.get("only_verified", True))),
@@ -390,6 +395,7 @@ def main():
             sys.exit(f"{tool} is required (brew install ffmpeg)")
     atexit.register(engine.shutdown)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    settings.PATH = os.path.join(jobs.TRAVAY, "settings.json")
     jobs.start()
     engine.start()
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)

@@ -28,6 +28,8 @@ import uuid
 import numpy as np
 import soundfile as sf
 
+import settings
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "kreyol-tts"))
 from kreyol_text import normalize as tts_normalize, split_text  # noqa: E402
@@ -46,7 +48,6 @@ REQUIRED = (WHISPER_SERVER, VAD_TOOL, ASR_MODEL, VAD_MODEL, LLAMA_TTS, TTS_MODEL
 VOICES = [("kreyol_f1", "Fanm 1"), ("kreyol_f2", "Fanm 2"), ("kreyol_f3", "Fanm 3"),
           ("kreyol_m1", "Gason 1"), ("kreyol_v5", "Vwa 5")]
 ASR_RATE, TTS_RATE = 16000, 24000
-MERGE_GAP_S, MAX_REGION_S, PAD_S = 2.0, 28.0, 0.2   # pauses kept inside a line; Whisper reads 30 s windows
 VOICE_S = (3.0, 15.0)    # a cloning reference shorter than 3 s is too little to go on; longer adds nothing
 WHISPER_PORT = 8178      # server.main() sets it to the page's port + 1, so two copies never collide
 
@@ -202,24 +203,29 @@ def start_whisper():
 
 
 def speech_regions(wav, total_s):
-    """Where the speech is, from the VAD, merged across pauses of up to 2 s and cut to Whisper's 30 s window.
+    """Where the speech is, from the VAD, grouped into lines the way the settings ask for.
 
-    These are the line timestamps (see the module docstring for why Whisper's own are not used).
+    These are the line timestamps (see the module docstring for why Whisper's own are not used). Lines that
+    run long make the model repeat itself, which is why the gap and the cap are both kept short and can be
+    changed in the Reglaj tab.
     """
-    r = subprocess.run([VAD_TOOL, "-vm", VAD_MODEL, "-f", wav], capture_output=True, text=True,
-                       stdin=subprocess.DEVNULL, timeout=1800)
+    gap, cap, pad = settings.get("merge_gap_s"), settings.get("max_region_s"), settings.get("pad_s")
+    r = subprocess.run([VAD_TOOL, "-vm", VAD_MODEL, "-f", wav,
+                        "-vt", str(settings.get("vad_threshold")),
+                        "-vsd", str(settings.get("vad_min_silence_ms"))],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=1800)
     raw = [(float(a) / 100, float(b) / 100) for a, b in re.findall(r"start = ([\d.]+), end = ([\d.]+)", r.stdout)]
     merged = []
     for a, b in raw:
-        if merged and a - merged[-1][1] <= MERGE_GAP_S and b - merged[-1][0] <= MAX_REGION_S:
+        if merged and a - merged[-1][1] <= gap and b - merged[-1][0] <= cap:
             merged[-1][1] = b
         else:
             merged.append([a, b])
     regions = []
-    for a, b in merged:            # one unbroken run longer than the window is cut into equal parts
-        n = max(1, math.ceil((b - a) / MAX_REGION_S))
+    for a, b in merged:            # one unbroken run longer than the cap is cut into equal parts
+        n = max(1, math.ceil((b - a) / cap))
         regions += [(a + i * (b - a) / n, a + (i + 1) * (b - a) / n) for i in range(n)]
-    return [(round(max(0.0, a - PAD_S), 2), round(min(total_s, b + PAD_S), 2)) for a, b in regions]
+    return [(round(max(0.0, a - pad), 2), round(min(total_s, b + pad), 2)) for a, b in regions]
 
 
 def whisper_text(wav_data):

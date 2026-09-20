@@ -38,6 +38,7 @@
     <a href="#bib" hidden><b>Bib la</b><small>Read and listen</small></a>
     <a href="#li"><b>Li ak mwen</b><small>Reading practice</small></a>
     <a href="#api"><b>API</b><small>For other apps</small></a>
+    <a href="#reglaj"><b>Reglaj</b><small>Settings</small></a>
   </nav>
 
   <!-- ============ Koute · Pale ============ -->
@@ -185,7 +186,7 @@
           <em>Files are read where they are, not copied.</em></p>
         <div class="crumbs" id="br-crumbs"></div>
         <ul class="br-list" id="br-list"></ul>
-        <footer>
+  <footer>
           <label class="meta"><input type="checkbox" id="br-recursive"> Ak sou-dosye yo <em>(include subfolders)</em></label>
           <button class="btn primary small" type="button" id="br-go" disabled>Transkri dosye sa a</button>
         </footer>
@@ -388,6 +389,30 @@
       <p class="note">Sèlman pwogram sou òdinatè sa a ka rive jwenn API a: sèvè a koute sou 127.0.0.1, epi li refize demann ki soti nan lòt sit.
         <em>Only programs on this computer can reach it: the server listens on 127.0.0.1 and refuses requests sent from other websites.
           To let a web app you trust call it from the browser, start the server with <code>--allow-origin http://localhost:3000</code>.</em></p>
+    </section>
+  </main>
+
+  <!-- ============ Reglaj ============ -->
+  <main id="tab-reglaj" class="tab" hidden>
+    <section class="station" aria-labelledby="set-title">
+      <header class="station-head">
+        <h2 id="set-title">Reglaj</h2>
+        <p class="dir">jan zouti yo travay <em>settings</em></p>
+      </header>
+      <p class="intro">Si liy yo twò long epi modèl la kòmanse repete tèt li, kite mwens poz antre nan yon liy epi bese longè maksimòm nan.
+        <em>If lines come out too long and the model starts repeating itself, keep fewer pauses inside a line and lower the
+          longest-line setting. Measured on five minutes of speech: with 2 s pauses kept and lines up to 28 s, 7.5% of the
+          words were inside a repeated run; with 0.8 s and 20 s, none were.</em></p>
+      <div id="set-fields"></div>
+      <div class="row" style="margin-top:18px">
+        <button class="btn primary" id="set-save" type="button">Sove</button>
+        <button class="btn small quiet" id="set-reset" type="button">Mete yo jan yo te ye</button>
+      </div>
+      <p class="status" id="set-status" role="status"></p>
+      <p class="note">Reglaj sa yo sèvi pou nouvo transkripsyon ak nouvo dokiman. Pou yon transkripsyon ki deja fèt, louvri l nan
+        Transkripsyon epi peze <b>Refè liy yo</b>: sa jwenn liy yo ankò ak reglaj jodi a, men koreksyon ou yo ap pèdi.
+        <em>These apply to new work. To re-cut a transcription you already have, open it and press Refè liy yo; it finds the lines
+          again with today's settings, and your corrections are lost.</em></p>
     </section>
   </main>
 

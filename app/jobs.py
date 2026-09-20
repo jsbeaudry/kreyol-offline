@@ -27,6 +27,7 @@ import soundfile as sf
 
 import asr_normalize
 import engine
+import settings
 from engine import UserError
 
 TRAVAY = os.path.join(engine.ROOT, "travay")
@@ -38,7 +39,6 @@ MIN_FREE = 1 << 30            # never fill the disk: keep 1 GB free
 MAX_DOC_CHARS = 100_000       # about 2 h 45 min of speech
 MAX_ROWS = 2000
 MAX_FOLDER_FILES = 500
-PAUSE_SENTENCE, PAUSE_PARAGRAPH = 0.25, 0.8
 CHARS_PER_SECOND = 10         # the five reference clips: 89 characters in 7.8-9.0 s
 
 
@@ -385,6 +385,22 @@ def edit_segments(jid, changes):
     stats = transcript_stats(segs)
     store.update(job, stats=stats)
     return stats
+
+
+def redo(jid):
+    """Find the lines again with the settings as they are now. The audio is kept; corrections are not."""
+    job = store.get(jid)
+    if job["status"] in ("running", "queued"):
+        raise UserError("Kanpe travay la anvan ou refè l. (Stop the job before doing it again.)")
+    if job["kind"] != "transkripsyon":
+        raise UserError("Se sèlman yon transkripsyon ou ka refè. (Only a transcription can be done again.)")
+    for name in ("regions.json", "transcript.json"):
+        path = store.dir(job, name)
+        if os.path.exists(path):
+            os.remove(path)
+    store.update(job, done=0, regions=None, progress=0.0, stats=None, speech_seconds=None, took_seconds=0)
+    enqueue(job)
+    return summary(job)
 
 
 def job_detail(jid):
@@ -734,7 +750,8 @@ def join_parts(parts, indices, dst, new_paragraph):
     with sf.SoundFile(dst + ".part.wav", "w", samplerate=engine.TTS_RATE, channels=1, subtype="PCM_16") as out:
         for k, i in enumerate(indices):
             if k:
-                pause = engine.silence(PAUSE_PARAGRAPH if new_paragraph[k] else PAUSE_SENTENCE)
+                pause = engine.silence(settings.get("paragraph_pause_s") if new_paragraph[k]
+                                       else settings.get("sentence_pause_s"))
                 out.write(pause)
                 frames += len(pause)
             audio, _ = sf.read(os.path.join(parts, f"{i:05d}.wav"), dtype="float32")
