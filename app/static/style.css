@@ -298,6 +298,17 @@ details.spoken-text p { font-size: 14px; white-space: pre-wrap; margin: 6px 0 0;
 .dots li button.tried { background: var(--sun-soft); color: var(--ink); border-color: var(--sun); }
 .note { font-size: 13px; color: var(--muted); margin: 14px 0 0; max-width: 62em; }
 
+/* ---------- Reglaj ---------- */
+.set-group + .set-group { margin-top: 26px; }
+.set-group h3 em { font-weight: 400; font-size: 14px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.setting { padding: 14px 16px; border: 1.5px solid var(--rule); border-radius: 12px; background: var(--sea); }
+.setting label.cap { display: block; font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+.setting input { width: 100%; min-height: 40px; padding: 0 12px; border: 1.5px solid var(--rule); border-radius: 10px;
+                 background: var(--panel); font-size: 16px; font-family: var(--mono); }
+.setting p { margin: 8px 0 0; }
+.setting p em { display: block; }
+
 /* ---------- API ---------- */
 /* full width like the other tools; prose keeps a readable line length */
 .api p { max-width: 62em; }

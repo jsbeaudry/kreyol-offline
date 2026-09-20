@@ -6,8 +6,9 @@ import * as dokiman from "./dokiman.js";
 import * as bib from "./bib.js";
 import * as li from "./li.js";
 import * as api from "./api.js";
+import * as reglaj from "./reglaj.js";
 
-const TOOLS = { rapid, transkripsyon, dokiman, bib, li, api };
+const TOOLS = { rapid, transkripsyon, dokiman, bib, li, api, reglaj };
 
 function show() {
   const id = location.hash.slice(1) in TOOLS ? location.hash.slice(1) : "rapid";

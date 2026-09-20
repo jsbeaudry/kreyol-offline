@@ -221,8 +221,23 @@ function renderHead() {
   exports.replaceChildren(
     ...["srt", "vtt", "txt", "json"].map((f) => el("a", { class: "btn tiny quiet", href: `/api/jobs/${j.id}/export/${f}`,
       download: "", "aria-disabled": String(!has), title: { srt: "Subtitles (SRT)", vtt: "Subtitles (WebVTT)", txt: "Plain text", json: "Everything, as JSON" }[f] }, f.toUpperCase())),
+    el("button", { class: "btn tiny quiet", type: "button", title: "Find the lines again with today's settings",
+                   onclick: () => redo(j) }, "Refè liy yo"),
     iconButton("folder", "Wè fichye yo nan Finder (show in Finder)", () => post(`/api/jobs/${j.id}/reveal`).catch((e) => fail(status(), e))),
   );
+}
+
+async function redo(j) {
+  if (!confirm(`Refè liy yo pou "${j.name}" ak reglaj jodi a? Koreksyon ou yo ap pèdi.\n\n` +
+               "(Find the lines again with today's settings? Your corrections to this transcription are lost; " +
+               "the audio is kept.)")) return;
+  try {
+    await post(`/api/jobs/${j.id}/redo`);
+    rows.clear();
+    $("#tk-lines").replaceChildren();
+    pollJobs(true);
+    refresh();
+  } catch (e) { fail(status(), e); }
 }
 
 function addSegments(segs) {

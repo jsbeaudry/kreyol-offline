@@ -23,6 +23,7 @@ the machine.
 | **Bib la** | The Kreyòl Bible to read and hear: pick a book and chapter, tap a line to hear it from there, or let the voice read the chapter. It reads in blocks of about 110 characters and prepares the next three while the current one plays, so the reading starts after about 11 s and then runs without a break. A chapter can also become one MP3, or the lines can go straight into reading practice. | An audio Bible with no connection, in a voice you choose, and any chapter as a file to carry on a phone. |
 | **Li ak mwen** | Reading practice: hear a sentence, read it aloud, and see which words the model heard (green), nearly heard (yellow) or missed (red). Five lessons built from the Space's example sentences, or your own text. | Recordings of learners, children included, are never saved or sent anywhere. |
 | **API** | An OpenAI-compatible API for other apps and scripts (below). | Existing OpenAI code gets Kreyòl speech by changing one URL. |
+| **Reglaj** | How a recording is cut into lines (detection level, shortest silence, pause kept inside a line, longest line, padding) and the silences the voice leaves between sentences and paragraphs. | Tune it to the recording in front of you. |
 
 Long jobs run in the background, one at a time per model; the quick tools slip in between two pieces of
 a job. A job that is stopped, or cut off by closing the server, resumes where it left off. Everything a
@@ -156,8 +157,12 @@ programs loaded:
 
 - **Speech to text:** whisper.cpp's `whisper-server` on the page's port + 1. The model was fine-tuned
   without timestamp tokens, so its own timestamps are unreliable; instead, Silero VAD finds the speech,
-  pauses of up to 2 s stay inside a line (at most 28 s long), and each line is transcribed on its own.
-  Subtitles split long lines into cues of about 7 s, timed in proportion to their length.
+  pauses of up to 0.8 s stay inside a line (at most 20 s long), and each line is transcribed on its own.
+  Those two numbers matter: on five minutes of speech, keeping 2 s pauses and lines up to 28 s put 7.5% of
+  the words inside a repeated run, one line 31% (the model looping on a long line). At 0.8 s and 20 s none
+  were, and the same speech came out 100 words shorter. The Reglaj tab changes them, and a transcription
+  already made can be cut again with **Refè liy yo**. Subtitles split long lines into cues of about 7 s,
+  timed in proportion to their length.
 - **Text to speech:** one `llama-tts` reading jobs from stdin (see the patch above).
   `kreyol-tts/kreyol_text.py` spells out numbers and splits long text into sentences first.
 
@@ -168,6 +173,7 @@ programs loaded:
 | `app/jobs.py` | Background jobs in `travay/`, the editor's saves, exports, documents |
 | `app/openai_api.py` | The `/v1` API |
 | `app/practice.py` | Reading practice: the lessons and the word alignment |
+| `app/settings.py` | The settings the Reglaj tab changes, kept in `travay/settings.json` |
 | `app/bible.py`, `app/make_bible.py` | The Bib tab's text, and the script that prepares it |
 | `app/asr_normalize.py` | The text form m3 was trained and scored on (a copy of the training normaliser) |
 | `app/index.html`, `app/static/` | The page: one script per tool, no outside assets |
