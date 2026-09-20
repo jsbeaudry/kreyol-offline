@@ -3,10 +3,11 @@ import { $, $$, get, size, voices, refitGrilles, pollJobs } from "./common.js";
 import * as rapid from "./rapid.js";
 import * as transkripsyon from "./transkripsyon.js";
 import * as dokiman from "./dokiman.js";
+import * as bib from "./bib.js";
 import * as li from "./li.js";
 import * as api from "./api.js";
 
-const TOOLS = { rapid, transkripsyon, dokiman, li, api };
+const TOOLS = { rapid, transkripsyon, dokiman, bib, li, api };
 
 function show() {
   const id = location.hash.slice(1) in TOOLS ? location.hash.slice(1) : "rapid";
@@ -32,6 +33,8 @@ async function health() {
                             : j.tts_mode ? "Each reading starts the voice model, about 1 s slower" : "");
     $("#tk-disk").textContent = `Espas lib sou disk la: ${size(j.disk_free)}. Yon èdtan odyo pran anviwon 115 MB. ` +
       `(Free disk space; an hour of audio takes about 115 MB here.)`;
+    $('.tabs a[href="#bib"]').hidden = !j.bible;
+    if (!j.bible && location.hash === "#bib") location.hash = "#rapid";
     if (first) {
       first = false;
       voices.openai = j.openai_voices || {};

@@ -24,6 +24,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import bible
 import engine
 import jobs
 import openai_api
@@ -228,6 +229,8 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", r"/voices/([a-z0-9_]+)\.wav"): self.voice_clip,
             ("GET", r"/api/health"): self.health,
             ("GET", r"/api/lessons"): lambda q: practice.LESSONS,
+            ("GET", r"/api/bible"): self.bible_books,
+            ("GET", r"/api/bible/([a-z0-9-]+)/(\d+)"): self.bible_chapter,
             ("GET", r"/api/browse"): lambda q: jobs.browse(q.get("path")),
             ("GET", r"/api/jobs"): lambda q: [jobs.summary(j) for j in jobs.store.list(q.get("kind"))],
             ("GET", r"/api/jobs/([\w-]+)"): lambda jid, q: jobs.job_detail(jid),
@@ -286,8 +289,20 @@ class Handler(BaseHTTPRequestHandler):
         return {"asr": engine.state["asr"], "asr_error": engine.state["asr_error"], "tts": engine.state["tts"],
                 "tts_mode": engine.state["tts_mode"], "port": PORT,
                 "voices": [{"id": v, "label": label} for v, label in engine.VOICES],
+                "bible": bible.available(),
                 "openai_voices": openai_api.OPENAI_VOICES,
                 "disk_free": jobs.free_bytes(), "jobs_active": len(running)}
+
+    def bible_books(self, q):
+        if not bible.available():
+            return self.send(404, {"error": "Pa gen Bib la sou òdinatè sa a. (No Bible text here; see app/make_bible.py.)"})
+        return {"books": bible.books()}
+
+    def bible_chapter(self, book, number, q):
+        chapter = bible.chapter(book, int(number)) if bible.available() else None
+        if chapter is None:
+            return self.send(404, {"error": "Chapit sa a pa la. (No such chapter.)"})
+        return chapter
 
     def quick_speak(self, q):
         req = self.json_body()

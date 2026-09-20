@@ -20,6 +20,7 @@ the machine.
 | **Koute · Pale** | A recording up to 10 minutes to text; up to 2,000 characters to speech, in five voices or a voice cloned from a 3–15 s clip. | Works with no connection. |
 | **Transkripsyon** | Recordings of any length, or a whole folder: interviews, radio shows, sermons, meetings, videos. Correct the text line by line while the audio plays, then export **SRT/VTT subtitles**, text, JSON, or the checked lines as **training data** (a 🤗 `audiofolder` zip: 16 kHz clips plus `metadata.csv`). | Hours of audio with no upload and no quota. Files in a folder are read where they are, never copied. Private recordings become training data without leaving the computer. The page also shows the model's word error rate on the lines you checked: a measure of it on your own material. |
 | **Dokiman** | A lesson, article or announcement (pasted, `.txt`, `.md` or `.docx`) read aloud into one MP3, with pauses between paragraphs. A `.csv` gives one file per row (phone menus, radio spots): columns `non,tèks,vwa`. | No length limit or per-character cost; a school, clinic or radio station can make audio without internet. |
+| **Bib la** | The Kreyòl Bible to read and hear: pick a book and chapter, tap a line to hear it from there, or let the voice read the chapter. A chapter can also become one MP3, or the lines can go straight into reading practice. | An audio Bible with no connection, in a voice you choose, and any chapter as a file to carry on a phone. |
 | **Li ak mwen** | Reading practice: hear a sentence, read it aloud, and see which words the model heard (green), nearly heard (yellow) or missed (red). Five lessons built from the Space's example sentences, or your own text. | Recordings of learners, children included, are never saved or sent anywhere. |
 | **API** | An OpenAI-compatible API for other apps and scripts (below). | Existing OpenAI code gets Kreyòl speech by changing one URL. |
 
@@ -27,6 +28,15 @@ Long jobs run in the background, one at a time per model; the quick tools slip i
 a job. A job that is stopped, or cut off by closing the server, resumes where it left off. Everything a
 job makes is in `travay/<job>/` (the folder button opens it in Finder). Deleting a job deletes its copy of
 the audio, never the original file. The page refuses a job that would leave less than 1 GB of disk free.
+
+The Bib tab appears only when `app/data/bible.json` is there. That file is not part of the kit: build it
+from the Bible pipeline's own files with
+
+```bash
+python3 app/make_bible.py path/to/bible.json path/to/merged_data.json
+```
+
+where the first file has the chapter text one sentence per line and the second has the Kreyòl book names.
 
 The page follows the computer's light or dark setting; the switch next to the lamps (Otomatik, Klè, Fonse)
 overrides it, and the browser remembers the choice.
@@ -158,6 +168,7 @@ programs loaded:
 | `app/jobs.py` | Background jobs in `travay/`, the editor's saves, exports, documents |
 | `app/openai_api.py` | The `/v1` API |
 | `app/practice.py` | Reading practice: the lessons and the word alignment |
+| `app/bible.py`, `app/make_bible.py` | The Bib tab's text, and the script that prepares it |
 | `app/asr_normalize.py` | The text form m3 was trained and scored on (a copy of the training normaliser) |
 | `app/index.html`, `app/static/` | The page: one script per tool, no outside assets |
 
@@ -178,3 +189,4 @@ Made by `setup.sh` or by the page, not in git:
 - `kreyol-tts/`: the Kreyòl talker and mmproj GGUFs, five reference voices and the text normaliser, from
   `jsbeaudry/qwen3-tts-1.7b-kreyol-GGUF`.
 - `travay/`: the page's jobs and exports.
+- `app/data/bible.json`: the Bible text for the Bib tab, if you build it.
