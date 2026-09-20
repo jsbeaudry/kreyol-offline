@@ -2,7 +2,7 @@
 import { $, el, get, post, clock, say, fail, ticker, Grille, startRecording, voicePicker } from "./common.js";
 
 const MAX_S = 30;                 // a practice sentence never needs more than this
-let lessons = [], sentences = [], index = 0, results = [], picker, grille, stopRec = null, recTimer = null, busy = false;
+let lessons = [], sentences = [], index = 0, results = [], picker, grille, stopRec = null, recTimer = null, busy = false, source = "";
 const audio = el("audio");
 const cache = new Map();          // "voice|sentence" -> object URL of the reading
 
@@ -22,6 +22,7 @@ function renderLessons() {
 }
 
 function choose(id) {
+  source = "";
   $("#li-custom").hidden = id !== "pa-w";
   if (id === "pa-w") { $("#li-custom-text").focus(); return; }
   start(lessons.find((l) => l.id === id).sentences);
@@ -40,9 +41,18 @@ function renderDots() {
   }, String(i + 1)))));
 }
 
+export function practiceWith(list, label = "") {        // the Bib tab sends a chapter over
+  source = label;
+  $("#li-custom").hidden = false;
+  $("#li-custom-text").value = list.join("\n");
+  document.querySelectorAll("#li-lessons input").forEach((input) => { input.checked = false; });
+  start(list);
+  location.hash = "#li";
+}
+
 function show() {
   const s = sentences[index];
-  $("#li-count").textContent = `FRAZ ${index + 1} / ${sentences.length}`;
+  $("#li-count").textContent = (source ? `${source.toUpperCase()} · ` : "") + `FRAZ ${index + 1} / ${sentences.length}`;
   $("#li-sentence").replaceChildren(...s.split(/\s+/).flatMap((w, i) => [i ? " " : "", el("span", { class: "w" }, w)]));
   $("#li-result").replaceChildren();
   $("#li-legend").hidden = true;
@@ -124,6 +134,7 @@ export async function init() {
   $("#li-rec").addEventListener("click", record);
   $("#li-next").addEventListener("click", next);
   $("#li-custom-go").addEventListener("click", () => {
+    source = "";
     const list = splitSentences($("#li-custom-text").value);
     if (!list.length) return fail($("#li-result"), new Error("Ekri kèk fraz anvan. (Write a few sentences first.)"));
     start(list);
