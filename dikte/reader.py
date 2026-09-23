@@ -24,15 +24,20 @@ import wave
 
 import numpy as np
 
+import settings
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LLAMA_TTS = os.path.join(ROOT, 'llama.cpp/build/bin/llama-tts')
-TTS_MODEL = os.path.join(ROOT, 'kreyol-tts/qwen3-tts-1.7b-kreyol-Q4_K_M.gguf')
-TTS_MMPROJ = os.path.join(ROOT, 'kreyol-tts/mmproj-qwen3-tts-1.7b-kreyol-Q8_0.gguf')
 VOICE_DIR = os.path.join(ROOT, 'kreyol-tts/voices')
 # -c 2048 for the same reason engine.py gives: otherwise a 32k KV cache costs 3.5 GB for a few hundred
 # tokens. The sampling settings match the page so a sentence sounds the same in both.
-TTS_ARGS = ['-m', TTS_MODEL, '--mmproj', TTS_MMPROJ, '-c', '2048', '-ngl', '99',
-            '--temp', '0.9', '--top-k', '50', '--top-p', '1.0', '--repeat-penalty', '1.05']
+SAMPLING = ['-c', '2048', '-ngl', '99', '--temp', '0.9', '--top-k', '50', '--top-p', '1.0',
+            '--repeat-penalty', '1.05']
+
+
+def tts_args():
+    """Built when the model starts, not at import, so a change in the menu is picked up."""
+    return ['-m', settings.get('tts_model'), '--mmproj', settings.get('tts_mmproj'), *SAMPLING]
 
 FIRST_BLOCK = 45         # small, so the sound starts sooner
 BLOCK = 220              # what kreyol_text.split_text uses by default
@@ -222,7 +227,8 @@ class Reader:
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self):
-        for path, what in ((LLAMA_TTS, 'llama-tts'), (TTS_MODEL, 'the voice model')):
+        for path, what in ((LLAMA_TTS, 'llama-tts'), (settings.get('tts_model'), 'the voice model'),
+                          (settings.get('tts_mmproj'), 'the voice projector')):
             if not os.path.exists(path):
                 self.error = f'cannot find {what} at {path}; run ./setup.sh'
                 print(f'  reading unavailable: {self.error}', flush=True)
@@ -230,7 +236,7 @@ class Reader:
         os.makedirs(self.tmp, exist_ok=True)
         log = open(os.path.join(ROOT, 'dikte/llama-tts.log'), 'w')
         started = time.time()
-        self.proc = subprocess.Popen([LLAMA_TTS, *TTS_ARGS, '-p', '-', '-o', os.devnull],
+        self.proc = subprocess.Popen([LLAMA_TTS, *tts_args(), '-p', '-', '-o', os.devnull],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
                                      text=True, bufsize=1)
         threading.Thread(target=self._pump, daemon=True).start()
@@ -264,7 +270,7 @@ class Reader:
 
     def _make(self, text, out, seed=0):
         """One block. Tabs and newlines would break the line-per-job protocol, so they are gone."""
-        speaker = os.path.join(VOICE_DIR, f'{self.voice}.wav')
+        speaker = self.voice if os.path.isabs(self.voice) else os.path.join(VOICE_DIR, f'{self.voice}.wav')
         self.proc.stdin.write(f"{out}\t{speaker}\t{seed}\t{' '.join(text.split())}\n")
         self.proc.stdin.flush()
         reply = self._reply(300)

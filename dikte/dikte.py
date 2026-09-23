@@ -40,9 +40,10 @@ import wave
 
 import numpy as np
 
+import settings
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WHISPER_SERVER = os.path.join(ROOT, 'whisper.cpp/build/bin/whisper-server')
-MODEL = os.path.join(ROOT, 'models/ggml-oswald-m3-q5_0.bin')
 RATE = 16000                       # what whisper wants; resampling later would only add latency
 MIN_SECONDS = 0.35                 # shorter than this is a stray key tap, not speech
 MAX_SECONDS = 120
@@ -114,13 +115,14 @@ def start_server(port, quiet=True):
     if server_is_up(port):
         print(f'using the whisper-server already on port {port}')
         return None
-    for path, what in ((WHISPER_SERVER, 'whisper-server'), (MODEL, 'the m3 model')):
+    model = settings.get('stt_model')
+    for path, what in ((WHISPER_SERVER, 'whisper-server'), (model, 'the speech model')):
         if not os.path.exists(path):
             sys.exit(f'cannot find {what} at {path}\nRun ./setup.sh first.')
     log = open(os.path.join(ROOT, 'dikte/whisper-server.log'), 'w')
-    process = subprocess.Popen([WHISPER_SERVER, '-m', MODEL, '-l', 'ht', '--host', '127.0.0.1',
+    process = subprocess.Popen([WHISPER_SERVER, '-m', model, '-l', 'ht', '--host', '127.0.0.1',
                                 '--port', str(port)], stdout=log, stderr=subprocess.STDOUT)
-    print(f'loading m3 on port {port}', end='', flush=True)
+    print(f'loading {settings.label(model)} on port {port}', end='', flush=True)
     for _ in range(180):
         if process.poll() is not None:
             sys.exit(f'\nwhisper-server stopped; see dikte/whisper-server.log')
@@ -387,6 +389,11 @@ class Service:
             raise RuntimeError('the key listener would not start; try python3 dikte/diagnose.py')
         self.on_state('idle')
 
+    def restart(self):
+        """Stop and start again, for a setting that means loading a model afresh."""
+        self.stop()
+        self.start()
+
     def read_selection(self):
         note = self.reader.toggle() if self.reader else 'reading is switched off'
         if note:
@@ -426,6 +433,72 @@ def run_headless(service, key_name):
         service.stop()
 
 
+def settings_menu(service, on_change):
+    """A submenu per setting, listing the files on this machine that could fill it.
+
+    A tick marks the one in use. Choosing a different speech or voice model means loading it again, so
+    the service restarts; choosing a different speaker is only another reference clip, and applies to
+    the next reading.
+    """
+    import rumps
+
+    root = rumps.MenuItem('Reglaj / Settings')
+    marks = []                                     # (setting, path, item) to tick and untick together
+
+    def mark():
+        for name, path, item in marks:
+            item.state = 1 if settings.get(name) == path else 0
+
+    def apply(name, path):
+        def handler(_):
+            settings.update({name: path})
+            mark()
+            try:
+                if name in settings.NEEDS_RESTART and service.running:
+                    service.restart()              # that model has to be loaded again
+                elif name == 'speaker' and service.reader:
+                    service.reader.voice = path    # no reload; the next reading uses it
+            except Exception as error:
+                service.stop()
+                rumps.alert('Dikte', f'{type(error).__name__}: {error}')
+            on_change()
+        return handler
+
+    for name, (_, title, folder, suffix) in settings.FIELDS.items():
+        group = rumps.MenuItem(title)
+        found = settings.choices(name)
+        for path in found:
+            item = rumps.MenuItem(settings.label(path), callback=apply(name, path))
+            marks.append((name, path, item))
+            group.add(item)
+        if not found:
+            empty = rumps.MenuItem(f'pa gen {suffix} nan {os.path.basename(folder)}/')
+            empty.set_callback(None)
+            group.add(empty)
+        root.add(group)
+
+    def open_folders(_):
+        for folder in ('models', 'kreyol-tts'):
+            subprocess.Popen(['open', os.path.join(ROOT, folder)])
+
+    def reset(_):
+        settings.reset()
+        mark()
+        try:
+            if service.running:
+                service.restart()
+        except Exception as error:
+            service.stop()
+            rumps.alert('Dikte', f'{type(error).__name__}: {error}')
+        on_change()
+
+    root.add(rumps.separator)
+    root.add(rumps.MenuItem('Louvri dosye modèl yo / Open model folders', callback=open_folders))
+    root.add(rumps.MenuItem('Remete / Reset to defaults', callback=reset))
+    mark()
+    return root
+
+
 def run_menu(service, key_name):
     """A menu bar icon that says what the service is doing, and one item that starts or stops it."""
     import rumps
@@ -445,8 +518,8 @@ def run_menu(service, key_name):
         current['state'] = state
         app.title = ICONS.get(state, ICONS['idle'])
         toggle.title = 'Kanpe / Stop' if service.running else 'Kòmanse / Start'
-        hint.title = (f'Kenbe {spoken} epi pale' if service.running
-                      else 'Sèvis la kanpe / Service stopped')
+        hint.title = (f'Kenbe {spoken} epi pale — {settings.label(settings.get("stt_model"))}'
+                      if service.running else 'Sèvis la kanpe / Service stopped')
         if service.reader is None:
             read_hint.title = 'Lekti pa disponib / Reading off'
         elif service.reader.error:
@@ -454,7 +527,8 @@ def run_menu(service, key_name):
         elif not service.reader.ready:
             read_hint.title = 'Vwa a ap chaje / Voice loading…'
         else:
-            read_hint.title = f'Chwazi yon tèks, kenbe {read_name} pou tande l'
+            read_hint.title = (f'Chwazi yon tèks, kenbe {read_name} pou tande l — '
+                               f'{settings.label(settings.get("speaker"))}')
 
     service.on_state = refresh
 
@@ -479,7 +553,9 @@ def run_menu(service, key_name):
     toggle.set_callback(toggled)
     hint.set_callback(None)                        # labels, not buttons
     read_hint.set_callback(None)
-    app.menu = [toggle, hint, read_hint, None, rumps.MenuItem('Kite / Quit', callback=quit_app)]
+    app.menu = [toggle, hint, read_hint, None,
+                settings_menu(service, lambda: refresh(current['state'])), None,
+                rumps.MenuItem('Kite / Quit', callback=quit_app)]
     # The voice finishes loading seconds after the service starts, so the label has to catch up. Repeat
     # the state rather than assuming one, or this would clear the icon in the middle of a recording.
     rumps.Timer(lambda _: refresh(current['state']), 2).start()
@@ -498,8 +574,8 @@ def main():
                    help='whisper-server port; 8178 shares the one the offline page starts')
     p.add_argument('--read-key', default='left_cmd', choices=sorted(KEY_NAMES),
                    help='hold this alone to read the selected text aloud (default: left_cmd)')
-    p.add_argument('--voice', default='kreyol_f1',
-                   help='kreyol_f1, kreyol_f2, kreyol_f3, kreyol_m1 or kreyol_v5')
+    p.add_argument('--voice', default=None,
+                   help='kreyol_f1, kreyol_f2, kreyol_f3, kreyol_m1 or kreyol_v5; remembered after')
     p.add_argument('--no-read', action='store_true', help='dictation only; do not load the voice')
     p.add_argument('--no-punct', action='store_true', help='do not add a full stop')
     p.add_argument('--no-menu', action='store_true', help='no menu bar icon, just the terminal')
@@ -507,6 +583,19 @@ def main():
     args = p.parse_args()
     if args.read_key == args.key:
         p.error('--read-key and --key must be different')
+    if args.voice:
+        # The flag sets the stored setting, so the menu and the next run agree with it.
+        chosen = os.path.join(ROOT, 'kreyol-tts/voices', f'{args.voice}.wav')
+        if not os.path.exists(chosen):
+            p.error(f'no such voice: {args.voice}')
+        settings.update({'speaker': chosen})
+    gone = settings.missing()
+    if gone:
+        print('these settings point at files that are not there, using the defaults instead:',
+              flush=True)
+        for name, path in gone.items():
+            print(f'  {name}: {path}', flush=True)
+        settings.update({name: settings.FIELDS[name][0] for name in gone})
 
     if args.file:
         server = start_server(args.port)
@@ -542,7 +631,8 @@ def main():
                  '  python3 dikte/dikte.py --file samples/j1_16k.wav')
 
     service = Service(args.port, args.key, punctuate=not args.no_punct,
-                      read_key=None if args.no_read else args.read_key, voice=args.voice)
+                      read_key=None if args.no_read else args.read_key,
+                      voice=settings.get('speaker'))
     try:
         (run_headless if args.no_menu else run_menu)(service, args.key)
     finally:

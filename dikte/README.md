@@ -46,6 +46,33 @@ The voice model takes 8.3 s to load, so it is loaded in the background when the 
 than on your first selection. `--voice` picks between `kreyol_f1`, `kreyol_f2`, `kreyol_f3`,
 `kreyol_m1` and `kreyol_v5`; `--no-read` skips the voice entirely and saves its 1.5 GB.
 
+## Reglaj: which models it uses
+
+The menu has a **Reglaj / Settings** submenu with one group per model, listing every file on this
+machine that could fill it. A tick marks the one in use.
+
+| Setting | Looks in | Kind |
+|---|---|---|
+| Speech to text | `models/` | `.bin` (ggml) |
+| Voice | `kreyol-tts/` | `.gguf` |
+| Voice projector | `kreyol-tts/` | `.gguf` named `mmproj*` |
+| Who reads | `kreyol-tts/voices/` | `.wav` |
+
+Drop another quantisation beside the current one — `ggml-oswald-m3-q8_0.bin`, say, or a different
+`-Q5_K_M.gguf` — and it appears in the menu next time it opens. Nothing is copied or converted here;
+`convert/` does that and `setup.sh` fetches the published ones. **Open model folders** in the same
+submenu reveals both in the Finder.
+
+Changing the speech model or the voice means loading it again, so the service restarts (a couple of
+seconds for speech, about eight for the voice). Changing who reads is only another reference clip, so
+it applies to the next reading with no restart.
+
+Choices live in `dikte/settings.json`, written the way `app/settings.py` writes the page's: to a
+temporary file and then renamed, so there is never a half-written one. Anything unknown, of the wrong
+kind, or not actually on disk is dropped on the way in — the cost of a bad value here is not an
+exception but a model server that will not start, with the reason buried in a log. A model deleted
+behind the app's back is reported at startup and the default used instead.
+
 ## Dictation
 
 ```bash

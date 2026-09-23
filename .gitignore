@@ -11,3 +11,8 @@ travay/
 
 # The Bible text is not shipped: app/make_bible.py builds it from your own files.
 app/data/
+
+# Dikte's per-machine state: which models are chosen, and its scratch audio.
+dikte/settings.json
+dikte/.audio/
+dikte/failed.wav

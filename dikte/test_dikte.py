@@ -193,6 +193,56 @@ def check_envelope():
           f'loudest {max(levels):.4f}; a missing or non-audio file gives silence')
 
 
+def check_settings():
+    """A setting must survive a restart, and must never store something that will not load.
+
+    The cost of a bad value here is not an exception but a model server that refuses to start, with
+    the reason buried in a log, so the check happens on the way in.
+    """
+    import tempfile
+    import settings
+
+    saved_path, saved_values = settings.PATH, settings._values
+    with tempfile.TemporaryDirectory() as tmp:
+        settings.PATH = os.path.join(tmp, 'settings.json')
+        settings._values = None
+        try:
+            speakers = settings.choices('speaker')
+            assert len(speakers) >= 2, 'need at least two voices to test switching'
+            settings.update({'speaker': speakers[1]})
+            settings._values = None                      # as if the app had been restarted
+            assert settings.get('speaker') == speakers[1], 'the choice was not remembered'
+            print(f'  chose {settings.label(speakers[1])}, still set after a reload')
+
+            for bad, why in (({'speaker': '/etc/passwd'}, 'wrong kind of file'),
+                             ({'speaker': os.path.join(tmp, 'gone.wav')}, 'not on disk'),
+                             ({'stt_model': 12345}, 'not even a string'),
+                             ({'nonsense': 'x'}, 'not a setting')):
+                before = dict(settings.all())
+                settings.update(bad)
+                assert settings.all() == before, f'{why} was stored'
+            print('  a wrong kind of file, a missing one, a number and an unknown name: all refused')
+
+            # The folders hold more than models; the wrong ones must not be offered.
+            stt = [settings.label(p) for p in settings.choices('stt_model')]
+            assert not any('silero' in name.lower() for name in stt), f'offered the detector: {stt}'
+            talkers = [os.path.basename(p) for p in settings.choices('tts_model')]
+            projectors = [os.path.basename(p) for p in settings.choices('tts_mmproj')]
+            assert not any(n.startswith('mmproj') for n in talkers), 'offered a projector as a voice'
+            assert all(n.startswith('mmproj') for n in projectors), 'offered a voice as a projector'
+            print(f'  {len(stt)} speech model(s), {len(talkers)} voice(s), '
+                  f'{len(projectors)} projector(s); the detector is not among them')
+
+            settings._values = dict(settings.all(), stt_model=os.path.join(tmp, 'deleted.bin'))
+            assert 'stt_model' in settings.missing(), 'a deleted model went unnoticed'
+            settings._values = None
+            settings.reset()
+            assert settings.all() == settings.defaults()
+            print('  a model deleted behind our back is reported; reset restores the defaults')
+        finally:
+            settings.PATH, settings._values = saved_path, saved_values
+
+
 def main():
     print('key holds: what a press meant')
     check_shortcuts_never_read()
@@ -205,6 +255,8 @@ def main():
     check_envelope()
     print('\nthe click the voice model leaves behind')
     check_trim_blip()
+    print('\nsettings: which models are in use')
+    check_settings()
     print('\nall checks passed')
 
 
