@@ -5,11 +5,43 @@ the laptop: the audio goes to a local `whisper-server` holding the m3 model in m
 straight to the front app.
 
 ```bash
-./start-dikte.sh                        # hold Right Command and speak
+./build-dikte-app.sh                    # build Dikte.app, then open it from the Finder
+./start-dikte.sh                        # or run it from a terminal instead
 ./start-dikte.sh --key right_ctrl       # if Right Command clashes with something
 ./start-dikte.sh --no-menu              # terminal only, no menu bar icon
 python3 dikte/dikte.py --file samples/j1_16k.wav   # no mic, no permissions: check the pipe works
 ```
+
+## The app
+
+`./build-dikte-app.sh` makes `~/Applications/Dikte.app`: a menu bar icon and nothing else — no Dock
+icon, no window, no terminal left open. The icon is the state.
+
+| | |
+|---|---|
+| 🎙 | listening for the key |
+| 🔴 | recording |
+| ⋯ | starting, or transcribing |
+| ⏸ | service stopped |
+
+Its one menu item starts and stops the service. Stopping it shuts down `whisper-server` too, giving
+back the 547 MB the model holds, and starting it again reloads in a couple of seconds. Quit from the
+same menu.
+
+The app is a thin launcher around `dikte/dikte.py` in this folder, not a copy, so editing the script
+changes the app without rebuilding. The interpreter and folder are written in as absolute paths,
+because an app launched from the Finder gets a minimal `PATH`, none of your shell's setup, and no
+pyenv shims — `python3` there is not the `python3` you have been using.
+
+**Do not run the app and the terminal script at the same time.** Both install a key listener, both
+would record, and you would get your words pasted twice.
+
+Permissions belong to whichever one you use. Granting Accessibility to Dikte.app means you can take it
+away from Terminal, which is the narrower arrangement: a dictation app that can type into other apps,
+rather than a terminal that can.
+
+Its log is `~/Library/Logs/Dikte.log`. That is where a failure to start goes, since there is no
+terminal to print to.
 
 ## How fast it is
 
@@ -30,8 +62,8 @@ and left running; loading the 547 MB model per utterance would cost about 2 seco
 python3 -m pip install sounddevice pynput rumps pyobjc-framework-Quartz pyobjc-framework-Cocoa
 ```
 
-Then grant **two** permissions to whatever you run this from — Terminal, iTerm, or your editor — in
-System Settings → Privacy & Security:
+Then grant **two** permissions to whatever you run it from — Dikte.app, or your terminal if you use the
+script — in System Settings → Privacy & Security:
 
 - **Microphone**, to record you.
 - **Accessibility**, to read the held key and to paste. Putting keystrokes into another app is exactly

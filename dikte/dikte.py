@@ -254,27 +254,117 @@ class Dictation:
         self.on_state('idle')
 
 
-def run_headless(dictation, key_name):
+
+
+class Service:
+    """The two things that can be running: the model server and the key listener.
+
+    They are kept together so the menu can stop both — freeing the 547 MB the model holds — and start
+    them again later without quitting the app.
+    """
+
+    def __init__(self, port, key, punctuate=True, on_state=None):
+        self.port, self.key, self.punctuate = port, key, punctuate
+        self.on_state = on_state or (lambda state: None)
+        self.server = self.listener = self.dictation = None
+
+    @property
+    def running(self):
+        return self.listener is not None and self.listener.running
+
+    def start(self):
+        if self.running:
+            return
+        self.on_state('starting')
+        self.server = start_server(self.port)      # None when reusing a server already listening
+        from pynput import keyboard
+        # The lambda defers to the current on_state, so the menu can replace it after construction.
+        self.dictation = Dictation(self.port, self.punctuate, lambda state: self.on_state(state))
+        hotkey = getattr(keyboard.Key, KEY_NAMES[self.key])
+
+        def on(action):
+            """An exception here would stop the listener and print nothing, leaving the key dead."""
+            def handler(key):
+                if key != hotkey:
+                    return
+                try:
+                    action()
+                except Exception as error:
+                    print(f'  {type(error).__name__}: {error}', flush=True)
+            return handler
+
+        self.listener = keyboard.Listener(on_press=on(self.dictation.start),
+                                          on_release=on(self.dictation.stop))
+        self.listener.start()
+        if not self.listener.running:
+            self.stop()
+            raise RuntimeError('the key listener would not start; try python3 dikte/diagnose.py')
+        self.on_state('idle')
+
+    def stop(self):
+        if self.listener:
+            self.listener.stop()
+            self.listener = None
+        self.dictation = None
+        if self.server:
+            # Only a server this process started. One that was already listening belongs to something
+            # else — the offline page, most likely — and is not ours to kill.
+            self.server.terminate()
+            try:
+                self.server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.server.kill()
+            self.server = None
+        self.on_state('off')
+
+
+def run_headless(service, key_name):
+    service.start()
     print(f'hold {key_name.replace("_", " ")} and speak. Ctrl+C to stop.')
     try:
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        print('\nbye')
+        print('\nstopping')
+    finally:
+        service.stop()
 
 
-def run_menu(dictation, key_name):
+def run_menu(service, key_name):
+    """A menu bar icon that says what the service is doing, and one item that starts or stops it."""
     import rumps
-    icons = {'idle': '🎙', 'recording': '🔴', 'working': '⏳'}
 
-    class Dikte(rumps.App):
-        @rumps.clicked('Kite / Quit')
-        def quit(self, _):
-            rumps.quit_application()
+    ICONS = {'off': '⏸', 'starting': '⋯', 'idle': '🎙', 'recording': '🔴', 'working': '⋯'}
+    app = rumps.App('Dikte', title=ICONS['off'], quit_button=None)
+    toggle = rumps.MenuItem('Kòmanse / Start')
+    hint = rumps.MenuItem(f'Kenbe {key_name.replace("_", " ")} epi pale')
 
-    app = Dikte('Dikte', title=icons['idle'], quit_button=None)
-    app.menu = [rumps.MenuItem(f'Hold {key_name.replace("_", " ")} and speak'), None]
-    dictation.on_state = lambda state: setattr(app, 'title', icons.get(state, icons['idle']))
+    def refresh(state):
+        app.title = ICONS.get(state, ICONS['idle'])
+        toggle.title = 'Kanpe / Stop' if service.running else 'Kòmanse / Start'
+        hint.title = (f'Kenbe {key_name.replace("_", " ")} epi pale' if service.running
+                      else 'Sèvis la kanpe / Service stopped')
+
+    service.on_state = refresh
+
+    def toggled(_):
+        try:
+            service.stop() if service.running else service.start()
+        except Exception as error:
+            service.stop()
+            rumps.alert('Dikte', f'{type(error).__name__}: {error}')
+        refresh('idle' if service.running else 'off')
+
+    def quit_app(_):
+        service.stop()
+        rumps.quit_application()
+
+    toggle.set_callback(toggled)
+    hint.set_callback(None)                        # a label, not a button
+    app.menu = [toggle, hint, None, rumps.MenuItem('Kite / Quit', callback=quit_app)]
+
+    # Start on launch: a dictation app that opens switched off is one you forget to switch on.
+    toggled(None)
     app.run()
 
 
@@ -290,51 +380,44 @@ def main():
     p.add_argument('--file', help='transcribe this wav and exit, instead of listening to the mic')
     args = p.parse_args()
 
-    server = start_server(args.port)
-    try:
-        if args.file:
+    if args.file:
+        server = start_server(args.port)
+        try:
             with open(args.file, 'rb') as f:
                 data = f.read()
             started = time.time()
             print(tidy(whisper_text(data, args.port), not args.no_punct))
             print(f'({time.time() - started:.2f}s)')
-            return
-
-        if not accessibility_ok():
-            sys.exit('\nThis needs Accessibility permission to read the hotkey and paste.\n'
-                     'System Settings → Privacy & Security → Accessibility → add the app running this\n'
-                     '(Terminal, iTerm, or your editor), switch it on, then run this again.\n'
-                     'To check the rest works without granting anything: --file samples/j1_16k.wav')
-
-        from pynput import keyboard
-        dictation = Dictation(args.port, punctuate=not args.no_punct)
-        hotkey = getattr(keyboard.Key, KEY_NAMES[args.key])
-
-        def on(action):
-            """An exception here would stop the listener and print nothing, leaving the key dead."""
-            def handler(key):
-                if key != hotkey:
-                    return
+        finally:
+            if server:
+                server.terminate()
                 try:
-                    action()
-                except Exception as error:
-                    print(f'  {type(error).__name__}: {error}', flush=True)
-            return handler
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+        return
 
-        listener = keyboard.Listener(on_press=on(dictation.start), on_release=on(dictation.stop))
-        listener.start()
-        if not listener.running:
-            sys.exit('the key listener would not start; run python3 dikte/diagnose.py')
-        (run_headless if args.no_menu else run_menu)(dictation, args.key)
-    finally:
-        if server:
-            # Wait for it to actually go: an orphaned whisper-server holds 547 MB and keeps the port,
-            # and the next run would silently attach to a server it does not control.
-            server.terminate()
+    if not accessibility_ok():
+        message = ('Dikte needs Accessibility permission to read the hotkey and to paste.\n\n'
+                   'System Settings → Privacy & Security → Accessibility → add the app running this '
+                   '(Dikte, or your terminal if you are running the script), switch it on, then quit '
+                   'it completely and open it again.')
+        if not args.no_menu:
+            # From the Finder there is no terminal and no Dock icon, so a message printed to the log
+            # is a silent failure. Put it on screen.
             try:
-                server.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                server.kill()
+                import rumps
+                rumps.alert('Dikte', message)
+            except Exception:
+                pass
+        sys.exit('\n' + message + '\n\nTo check the rest works without granting anything:\n'
+                 '  python3 dikte/dikte.py --file samples/j1_16k.wav')
+
+    service = Service(args.port, args.key, punctuate=not args.no_punct)
+    try:
+        (run_headless if args.no_menu else run_menu)(service, args.key)
+    finally:
+        service.stop()
 
 
 if __name__ == '__main__':
