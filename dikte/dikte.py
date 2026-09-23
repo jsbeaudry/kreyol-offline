@@ -467,6 +467,8 @@ def settings_menu(service, on_change):
     busy = {'name': None}                          # one download at a time
 
     def title_for(option):
+        if option.get('rejected'):
+            return f'{option["label"]} — {option["rejected"]}'
         note = f' — {option["note"]}' if option['note'] else ''
         if option['local']:
             return f'{option["label"]}{note}'
@@ -508,10 +510,13 @@ def settings_menu(service, on_change):
         found = settings.options(name)
         for option in found:
             item = rumps.MenuItem(title_for(option))
-            item.set_callback(apply(name, option['path']) if option['local']
-                              else download(name, option, item))
-            if option['local']:
-                marks.append((name, option['path'], item))
+            if option.get('rejected'):
+                item.set_callback(None)        # there, so it is not chosen by mistake, not to choose
+            else:
+                item.set_callback(apply(name, option['path']) if option['local']
+                                  else download(name, option, item))
+                if option['local']:
+                    marks.append((name, option['path'], item))
             group.add(item)
         if not found:
             empty = rumps.MenuItem(f'pa gen {suffix} nan {os.path.basename(folder)}/')

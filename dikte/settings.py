@@ -50,6 +50,14 @@ CATALOGUE = {
                    ('mmproj-qwen3-tts-1.7b-kreyol-f16.gguf', 701, '')],
 }
 
+# Quantisations measured not to work, listed so that one sitting in the folder cannot be chosen by
+# mistake. Q2_K was made and tested on 2026-09-23: asked for a seven-second sentence it produced 41
+# seconds of "li li li li" with Chinese and Cyrillic in it. At 1.7B parameters two bits take away the
+# model's grounding and its ability to stop. See convert/README.md.
+REJECTED = {'qwen3-tts-1.7b-kreyol-Q2_K.gguf': 'unusable: loops and never stops',
+            'qwen3-tts-1.7b-kreyol-IQ2_XXS.gguf': 'unusable: two bits is too few for this model',
+            'qwen3-tts-1.7b-kreyol-IQ2_S.gguf': 'unusable: two bits is too few for this model'}
+
 _lock = threading.RLock()
 _values = None
 
@@ -93,12 +101,12 @@ def options(name):
         path = os.path.join(folder, filename)
         seen.add(path)
         out.append({'path': path, 'label': label(path), 'mb': mb, 'note': note,
-                    'local': os.path.exists(path)})
+                    'local': os.path.exists(path), 'rejected': REJECTED.get(filename)})
     for path in choices(name):                  # anything dropped in by hand, or an older download
         if path not in seen:
             size = os.path.getsize(path) / 1e6 if os.path.exists(path) else 0
             out.append({'path': path, 'label': label(path), 'mb': round(size), 'note': '',
-                        'local': True})
+                        'local': True, 'rejected': REJECTED.get(os.path.basename(path))})
     return out
 
 
@@ -159,6 +167,8 @@ def clean(changes):
             continue
         _, _, _, suffix = FIELDS[name]
         path = value if os.path.isabs(value) else os.path.join(ROOT, value)
+        if os.path.basename(path) in REJECTED:
+            continue                         # measured not to work; see REJECTED
         if path.endswith(suffix) and os.path.exists(path):
             out[name] = path
     return out
