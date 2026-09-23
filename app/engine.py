@@ -36,13 +36,10 @@ from kreyol_text import normalize as tts_normalize, split_text  # noqa: E402
 
 WHISPER_SERVER = os.path.join(ROOT, "whisper.cpp/build/bin/whisper-server")
 LLAMA_TTS = os.path.join(ROOT, "llama.cpp/build/bin/llama-tts")
-ASR_MODEL = os.path.join(ROOT, "models/ggml-oswald-m3-q5_0.bin")
 VAD_MODEL = os.path.join(ROOT, "models/ggml-silero-v6.2.0.bin")
 VAD_TOOL = os.path.join(ROOT, "whisper.cpp/build/bin/whisper-vad-speech-segments")
-TTS_MODEL = os.path.join(ROOT, "kreyol-tts/qwen3-tts-1.7b-kreyol-Q4_K_M.gguf")
-TTS_MMPROJ = os.path.join(ROOT, "kreyol-tts/mmproj-qwen3-tts-1.7b-kreyol-Q8_0.gguf")
 VOICE_DIR = os.path.join(ROOT, "kreyol-tts/voices")
-REQUIRED = (WHISPER_SERVER, VAD_TOOL, ASR_MODEL, VAD_MODEL, LLAMA_TTS, TTS_MODEL, TTS_MMPROJ)
+REQUIRED = (WHISPER_SERVER, VAD_TOOL, VAD_MODEL, LLAMA_TTS)   # the models come from settings
 
 # Median pitch of the reference clips: f1 198 Hz, f2 240, f3 208 (women); m1 113, v5 118 (men).
 VOICES = [("kreyol_f1", "Fanm 1"), ("kreyol_f2", "Fanm 2"), ("kreyol_f3", "Fanm 3"),
@@ -56,6 +53,7 @@ asr_lock, tts_lock = threading.Lock(), threading.Lock()
 TMP = tempfile.mkdtemp(prefix="kreyol-page-")
 custom_voices = {}       # voice id -> reference WAV, for this session only
 procs = []
+running = {"asr": None, "tts": None}   # the process each kind uses, so it can be swapped
 
 
 class UserError(Exception):
@@ -183,10 +181,12 @@ def encode_file(src, dst, fmt):
 def start_whisper():
     """Load m3 once and keep it loaded. The first launch after a build compiles Metal kernels (~25 s)."""
     log = open(os.path.join(ROOT, "app/whisper-server.log"), "w")
-    cmd = [WHISPER_SERVER, "-m", ASR_MODEL, "-l", "ht", "--vad", "-vm", VAD_MODEL, "-bs", "1", "-bo", "1",
+    cmd = [WHISPER_SERVER, "-m", settings.get("stt_model"), "-l", "ht", "--vad", "-vm", VAD_MODEL,
+           "-bs", "1", "-bo", "1",
            "--host", "127.0.0.1", "--port", str(WHISPER_PORT)]
     proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
     procs.append(proc)
+    running["asr"] = proc
     deadline = time.time() + 180
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -275,8 +275,13 @@ def transcribe_bytes(data, max_s):
 # ---------- text to speech ----------
 
 # -c 2048: llama-tts otherwise allocates a 32k-token KV cache (3.5 GB) for a few hundred tokens.
-TTS_ARGS = ["-m", TTS_MODEL, "--mmproj", TTS_MMPROJ, "-c", "2048", "-ngl", "99",
-            "--temp", "0.9", "--top-k", "50", "--top-p", "1.0", "--repeat-penalty", "1.05"]
+TTS_SAMPLING = ["-c", "2048", "-ngl", "99",
+                "--temp", "0.9", "--top-k", "50", "--top-p", "1.0", "--repeat-penalty", "1.05"]
+
+
+def tts_args():
+    """Built when the model starts, not at import, so a change in Reglaj is picked up."""
+    return ["-m", settings.get("tts_model"), "--mmproj", settings.get("tts_mmproj"), *TTS_SAMPLING]
 
 
 class VoiceModel:
@@ -295,9 +300,10 @@ class VoiceModel:
     def start(self):
         log = open(os.path.join(ROOT, "app/llama-tts.log"), "w")
         # -o devnull: a stock build would read "-" as the text and write a file; make that harmless
-        self.proc = subprocess.Popen([LLAMA_TTS, *TTS_ARGS, "-p", "-", "-o", os.devnull], stdin=subprocess.PIPE,
+        self.proc = subprocess.Popen([LLAMA_TTS, *tts_args(), "-p", "-", "-o", os.devnull], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
         procs.append(self.proc)
+        running["tts"] = self.proc
         self.replies = queue.Queue()
         threading.Thread(target=self._pump, args=(self.proc, self.replies), daemon=True).start()
         self.loaded = self._reply(120) == "@@tts\tready"
@@ -337,7 +343,7 @@ class VoiceModel:
 
 def read_once(text, speaker, out, seed):
     """The fallback: a fresh llama-tts for one piece of text, paying the ~1 s start-up every time."""
-    r = subprocess.run([LLAMA_TTS, *TTS_ARGS, "-p", text, "--tts-speaker-file", speaker, "-o", out,
+    r = subprocess.run([LLAMA_TTS, *tts_args(), "-p", text, "--tts-speaker-file", speaker, "-o", out,
                         "--seed", str(seed)], capture_output=True, text=True, timeout=300)
     if r.returncode != 0 or not os.path.exists(out):
         print(r.stderr[-2000:], file=sys.stderr, flush=True)
@@ -447,6 +453,33 @@ def add_voice(data):
 def start():
     threading.Thread(target=start_whisper, daemon=True).start()
     threading.Thread(target=voice_model.start, daemon=True).start()
+
+
+def reload(kind):
+    """Load a different model for `kind` without restarting the page.
+
+    The lock is what makes this safe. A transcription or a reading already in flight holds it, so the
+    old model is not pulled out from under it; anything that arrives afterwards meets require() and
+    gets the same "still loading" refusal the page already shows at startup. Long jobs run one at a
+    time behind the same lock, so a job in progress finishes on the old model and the next piece of
+    work uses the new one.
+    """
+    lock = asr_lock if kind == "asr" else tts_lock
+    with lock:
+        state[kind] = "starting"
+        state[kind + "_error"] = "" if kind == "asr" else state.get("asr_error", "")
+        proc = running.get(kind)
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        running[kind] = None
+        if kind == "tts":
+            voice_model.proc, voice_model.loaded = None, False
+    # Outside the lock: loading takes seconds, and holding it would block the refusal itself.
+    threading.Thread(target=start_whisper if kind == "asr" else voice_model.start, daemon=True).start()
 
 
 def shutdown():
