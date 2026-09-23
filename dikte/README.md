@@ -22,19 +22,25 @@ least half a second. A shortcut fails the second test; a tap fails the third. `d
 checks exactly that, because the failure mode is not an error message — it is a voice reading your
 clipboard every time you copy something.
 
-Making speech runs at about 1.1 to 1.3 times real time: fast enough to stay ahead of playback, not fast
-enough to make a paragraph before it starts. So the selection is cut into blocks that start small and
-grow, each at most about 1.35 times the last, which is all that can be made while the previous one
-plays. Measured on a 222-character paragraph: the first words at **3.7 s**, then no silence at all.
+The model leaves a click in the silence after each piece — 10 to 30 ms, sometimes as loud as the
+speech, 0.15 to 1.2 s after the last word. In a reading made of several pieces you hear one at every
+join. `trim_blip`, copied from `app/engine.py`, cuts it and fades the end; keep the two in sync.
 
-| block | chars | made in | audio | silence before it |
+Trimming that click also takes the trailing silence, and that silence had been the cover under which
+the next block was made. After trimming, a block costs about 0.93 of its own playing time to make, so
+blocks may only grow about 1.15 times each, and a 0.3 s pause sits between them — a breath between
+sentences that also buys a little room. Measured on a 222-character paragraph:
+
+| block | chars | made in | audio | extra silence |
 |---|---|---|---|---|
-| 0 | 42 | 3.7s | 5.2s | first sound at 3.7s |
-| 1 | 55 | 4.8s | 6.1s | none |
-| 2 | 70 | 6.4s | 9.0s | none |
-| 3 | 52 | 5.2s | 6.6s | none |
+| 0 | 53 | 5.4s | 5.6s | first sound at 5.4s |
+| 1 | 52 | 5.5s | 5.8s | none |
+| 2 | 62 | 6.0s | 6.5s | none |
+| 3 | 52 | 5.7s | 5.6s | none |
 
-Going straight to full-size blocks instead puts a 2.2-second gap after the first one.
+Blocks are whole sentences. Cutting finer made a ten-character block that cost 2.7 s to produce 1.9 s
+of audio; asking `split_text` for larger pieces handed back the paragraph as one 169-character block,
+eleven seconds before any sound. Its sentence rule, used directly, gives neither.
 
 The voice model takes 8.3 s to load, so it is loaded in the background when the service starts rather
 than on your first selection. `--voice` picks between `kreyol_f1`, `kreyol_f2`, `kreyol_f3`,

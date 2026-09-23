@@ -15,6 +15,7 @@ reading stays unavailable rather than silently starting a process per block.
 """
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -36,11 +37,15 @@ TTS_ARGS = ['-m', TTS_MODEL, '--mmproj', TTS_MMPROJ, '-c', '2048', '-ngl', '99',
 FIRST_BLOCK = 45         # small, so the sound starts sooner
 BLOCK = 220              # what kreyol_text.split_text uses by default
 MAX_CHARS = 5000         # a whole document selected by accident should not become a ten-minute reading
-# Making a block costs about 0.73 of the time it takes to play, so while one block plays there is room
-# to make the next one up to about 1.37 times its length. Grow slower than that and the sound never
-# catches up with the making; jump straight to full-size blocks and there is a gap after the first.
-GROWTH = 1.35
+MIN_BLOCK = 25           # shorter than this, the fixed cost of a call outweighs the audio it makes
+# Trimming the click also takes the trailing silence, and that silence had been the cover under
+# which the next block was made. Measured after trimming, making a block costs about 0.93 of its own
+# playing time, so a block can only be about 1.15 times the one before it. Blocks split at sentence
+# ends, so what is left of the shortfall lands between sentences, where a pause belongs.
+GROWTH = 1.15
+PAUSE = 0.3              # between blocks: a breath between sentences, and cover for the next one
 STEP = 0.08              # how often the level is reported while a block plays
+TTS_RATE = 24000         # what llama-tts writes
 
 sys.path.insert(0, os.path.join(ROOT, 'kreyol-tts'))
 
@@ -55,17 +60,90 @@ def blocks(text):
     text = kreyol_text.normalize(' '.join(text.split()))[:MAX_CHARS]
     if not text:
         return []
-    units = kreyol_text.split_text(text, max_chars=FIRST_BLOCK)   # the finest split worth reading
+    # One sentence at a time. split_text groups sentences up to a limit rather than separating them,
+    # so asking it for small pieces cuts inside sentences (a ten-character block cost 2.7 s to make
+    # for 1.9 s of audio) and asking it for large ones hands back the whole paragraph as one piece
+    # (169 characters, eleven seconds before a sound). Its own sentence rule, used directly, gives
+    # units that are neither.
+    units = []
+    for sentence in (s for s in re.split(r'(?<=[.!?…])\s+', text) if s):
+        units.extend(kreyol_text.split_text(sentence, max_chars=BLOCK)
+                     if len(sentence) > BLOCK else [sentence])
     out, held, budget = [], '', FIRST_BLOCK
     for unit in units:
-        if held and len(held) + 1 + len(unit) > budget:
+        candidate = f'{held} {unit}'.strip()
+        if held and len(candidate) > budget:
             out.append(held)
             held, budget = unit, min(int(budget * GROWTH), BLOCK)
         else:
-            held = f'{held} {unit}'.strip()
+            held = candidate
     if held:
         out.append(held)
+    merged = []
+    for piece in out:                 # a runt is not worth a synthesis call of its own
+        if merged and len(piece) < MIN_BLOCK:
+            merged[-1] = f'{merged[-1]} {piece}'
+        else:
+            merged.append(piece)
+    return merged
+
+
+def trim_blip(audio, rate=TTS_RATE):
+    """Cut the click the model leaves in the silence after a piece, and end the piece cleanly.
+
+    Copy of trim_blip in app/engine.py; keep the two in sync. Its measurement, over 19 readings: 11
+    ended with a 10-30 ms burst, 0.15-1.2 s after the last word and sometimes as loud as the speech
+    itself. In a reading made of several pieces you hear one at every join and one at the end — which
+    is exactly what a reading assembled here is.
+    """
+    n = int(0.010 * rate)
+    if len(audio) < 4 * n:
+        return audio
+    energy = np.sqrt((audio[:len(audio) // n * n].reshape(-1, n) ** 2).mean(axis=1))
+    loud = energy > max(0.006, 0.02 * float(energy.max()))
+    runs, start = [], None
+    for i, on in enumerate(np.append(loud, False)):
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            if runs and (start - runs[-1][1]) * n / rate < 0.12:     # one burst often rings a second time
+                runs[-1] = (runs[-1][0], i)
+            else:
+                runs.append((start, i))
+            start = None
+    if not runs:
+        return audio
+    while len(runs) > 1:      # drop every short burst that sits alone in the silence after the speech
+        gap, length = (runs[-1][0] - runs[-2][1]) * n / rate, (runs[-1][1] - runs[-1][0]) * n / rate
+        if gap < 0.10 or length > 0.15:
+            break
+        runs.pop()
+    end = min(len(audio), runs[-1][1] * n + int(0.06 * rate))       # a little room after the last word
+    out = audio[:end].copy()
+    fade = min(int(0.04 * rate), len(out))       # fades away anything faint left in that room
+    out[len(out) - fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
     return out
+
+
+def trim_file(path):
+    """Apply trim_blip to a block in place, before anyone hears it."""
+    try:
+        with wave.open(path, 'rb') as w:
+            rate, channels, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+            raw = w.readframes(w.getnframes())
+        if width != 2 or channels != 1:
+            return                       # not the 16-bit mono llama-tts writes; leave it alone
+        audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768
+        trimmed = trim_blip(audio, rate)
+        if len(trimmed) == len(audio):
+            return
+        with wave.open(path, 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes((np.clip(trimmed, -1.0, 1.0) * 32767).astype(np.int16).tobytes())
+    except Exception as error:
+        print(f'  could not trim {os.path.basename(path)}: {error}', flush=True)
 
 
 def envelope(path, step=STEP):
@@ -229,6 +307,7 @@ class Reader:
                     path = os.path.join(self.tmp, f'block{i % 6}.wav')
                     with self.lock:                       # one job at a time down the same pipe
                         self._make(piece, path)
+                    trim_file(path)                       # before it is queued, not after
                     made.put(path)
             except Exception as error:
                 print(f'  reading failed: {error}', flush=True)
@@ -250,6 +329,9 @@ class Reader:
                     self.on_level(levels[step] if step < len(levels) else 0.0)
                     time.sleep(STEP)
                 self.player = None
+                if not self.cancel.is_set():
+                    self.on_level(0.0)
+                    time.sleep(PAUSE)
         finally:
             self.cancel.set()                              # stop the producer if playback ended first
             self.on_level(0.0)
