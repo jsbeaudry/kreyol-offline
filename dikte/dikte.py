@@ -43,11 +43,15 @@ MODEL = os.path.join(ROOT, 'models/ggml-oswald-m3-q5_0.bin')
 RATE = 16000                       # what whisper wants; resampling later would only add latency
 MIN_SECONDS = 0.35                 # shorter than this is a stray key tap, not speech
 MAX_SECONDS = 120
+# Left Command is Cmd+C, Cmd+V, Cmd+Tab all day long, so reading fires only when the key was held
+# alone, with nothing else pressed, for at least this long. A shortcut fails both tests.
+HOLD_SECONDS = 0.5
 
 # Modifier keys that are safe to hold on a Kreyòl keyboard. Option is deliberately absent from the
 # defaults: it is the accent key.
 KEY_NAMES = {'right_cmd': 'cmd_r', 'right_ctrl': 'ctrl_r', 'right_shift': 'shift_r',
-             'right_alt': 'alt_r', 'f13': 'f13', 'f14': 'f14', 'f15': 'f15'}
+             'right_alt': 'alt_r', 'left_cmd': 'cmd_l', 'left_ctrl': 'ctrl_l',
+             'f13': 'f13', 'f14': 'f14', 'f15': 'f15'}
 
 SOUNDS = {'start': '/System/Library/Sounds/Tink.aiff',
           'done': '/System/Library/Sounds/Pop.aiff',
@@ -169,6 +173,39 @@ def accessibility_ok():
     return bool(AXIsProcessTrusted())
 
 
+class Holds:
+    """Decide what a modifier key press meant: a deliberate hold, or part of a shortcut.
+
+    Left Command is pressed all day for Cmd+C, Cmd+V and Cmd+Tab. The only safe reading of "hold Left
+    Command" is: it went down on its own, nothing else was pressed while it was down, and it stayed
+    down a while. A shortcut fails the second test, a tap fails the third.
+    """
+
+    def __init__(self, keys, clock=time.monotonic):
+        self.keys = {key for key in keys if key is not None}
+        self.clock = clock
+        self.key, self.since, self.alone = None, 0.0, True
+
+    def press(self, key):
+        """True when one of the watched keys has just gone down by itself."""
+        if self.key is None:
+            if key in self.keys:
+                self.key, self.since, self.alone = key, self.clock(), True
+                return True
+            return False
+        if key != self.key:
+            self.alone = False          # something else joined it: this is a shortcut being typed
+        return False
+
+    def release(self, key):
+        """(key that was held, whether nothing else was pressed, how long it was down)."""
+        if key != self.key:
+            return None, False, 0.0
+        held, alone, seconds = self.key, self.alone, self.clock() - self.since
+        self.key = None
+        return held, alone, seconds
+
+
 class Dictation:
     """Hold the key: record. Release it: transcribe, tidy, paste."""
 
@@ -204,6 +241,19 @@ class Dictation:
             return
         self.on_state('recording')
         cue('start')
+
+    def cancel(self):
+        """Throw the recording away: the key turned out to be part of a shortcut, not dictation."""
+        if not self.recording:
+            return
+        with self.lock:
+            self.recording = False
+            self.frames = []
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+        self.on_state('idle')
 
     def stop(self):
         if not self.recording:
@@ -263,10 +313,11 @@ class Service:
     them again later without quitting the app.
     """
 
-    def __init__(self, port, key, punctuate=True, on_state=None):
+    def __init__(self, port, key, punctuate=True, on_state=None, read_key=None, voice='kreyol_f1'):
         self.port, self.key, self.punctuate = port, key, punctuate
+        self.read_key, self.voice = read_key, voice
         self.on_state = on_state or (lambda state: None)
-        self.server = self.listener = self.dictation = None
+        self.server = self.listener = self.dictation = self.reader = None
 
     @property
     def running(self):
@@ -280,32 +331,59 @@ class Service:
         from pynput import keyboard
         # The lambda defers to the current on_state, so the menu can replace it after construction.
         self.dictation = Dictation(self.port, self.punctuate, lambda state: self.on_state(state))
-        hotkey = getattr(keyboard.Key, KEY_NAMES[self.key])
+        dictate_key = getattr(keyboard.Key, KEY_NAMES[self.key])
+        read_key = getattr(keyboard.Key, KEY_NAMES[self.read_key]) if self.read_key else None
 
-        def on(action):
+        if read_key is not None:
+            from reader import Reader
+            self.reader = Reader(self.voice, on_state=lambda state: self.on_state(state))
+            self.reader.preload()          # 8.3 s, in the background, so the first selection is not slow
+
+        def guard(action):
             """An exception here would stop the listener and print nothing, leaving the key dead."""
-            def handler(key):
-                if key != hotkey:
-                    return
-                try:
-                    action()
-                except Exception as error:
-                    print(f'  {type(error).__name__}: {error}', flush=True)
-            return handler
+            try:
+                action()
+            except Exception as error:
+                print(f'  {type(error).__name__}: {error}', flush=True)
 
-        self.listener = keyboard.Listener(on_press=on(self.dictation.start),
-                                          on_release=on(self.dictation.stop))
+        holds = Holds([dictate_key, read_key])
+
+        def on_press(key):
+            # Dictation starts the moment the key goes down: push-to-talk that waited would clip you.
+            if holds.press(key) and key == dictate_key:
+                guard(self.dictation.start)
+
+        def on_release(key):
+            held, alone, seconds = holds.release(key)
+            if held is None:
+                return
+            if held == dictate_key:
+                # Right Command with something else was a shortcut; throw the recording away.
+                guard(self.dictation.stop if alone else self.dictation.cancel)
+            elif alone and seconds >= HOLD_SECONDS:
+                guard(self.read_selection)
+
+        self.listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self.listener.start()
         if not self.listener.running:
             self.stop()
             raise RuntimeError('the key listener would not start; try python3 dikte/diagnose.py')
         self.on_state('idle')
 
+    def read_selection(self):
+        note = self.reader.toggle() if self.reader else 'reading is switched off'
+        if note:
+            print(f'  {note}', flush=True)
+            cue('empty')
+
     def stop(self):
         if self.listener:
             self.listener.stop()
             self.listener = None
         self.dictation = None
+        if self.reader:
+            self.reader.shutdown()         # gives back the 1.5 GB the voice model holds
+            self.reader = None
         if self.server:
             # Only a server this process started. One that was already listening belongs to something
             # else — the offline page, most likely — and is not ours to kill.
@@ -321,6 +399,8 @@ class Service:
 def run_headless(service, key_name):
     service.start()
     print(f'hold {key_name.replace("_", " ")} and speak. Ctrl+C to stop.')
+    if service.read_key:
+        print(f'select text and hold {service.read_key.replace("_", " ")} alone to hear it read.')
     try:
         while True:
             time.sleep(3600)
@@ -334,16 +414,31 @@ def run_menu(service, key_name):
     """A menu bar icon that says what the service is doing, and one item that starts or stops it."""
     import rumps
 
-    ICONS = {'off': '⏸', 'starting': '⋯', 'idle': '🎙', 'recording': '🔴', 'working': '⋯'}
+    ICONS = {'off': '⏸', 'starting': '⋯', 'idle': '🎙', 'recording': '🔴', 'working': '⋯',
+             'speaking': '🔊'}
     app = rumps.App('Dikte', title=ICONS['off'], quit_button=None)
     toggle = rumps.MenuItem('Kòmanse / Start')
-    hint = rumps.MenuItem(f'Kenbe {key_name.replace("_", " ")} epi pale')
+    spoken = key_name.replace('_', ' ')
+    read_name = (service.read_key or '').replace('_', ' ')
+    hint = rumps.MenuItem(f'Kenbe {spoken} epi pale')
+    read_hint = rumps.MenuItem(f'Chwazi yon tèks, kenbe {read_name} pou tande l')
+
+    current = {'state': 'off'}
 
     def refresh(state):
+        current['state'] = state
         app.title = ICONS.get(state, ICONS['idle'])
         toggle.title = 'Kanpe / Stop' if service.running else 'Kòmanse / Start'
-        hint.title = (f'Kenbe {key_name.replace("_", " ")} epi pale' if service.running
+        hint.title = (f'Kenbe {spoken} epi pale' if service.running
                       else 'Sèvis la kanpe / Service stopped')
+        if service.reader is None:
+            read_hint.title = 'Lekti pa disponib / Reading off'
+        elif service.reader.error:
+            read_hint.title = f'Lekti: {service.reader.error[:44]}'
+        elif not service.reader.ready:
+            read_hint.title = 'Vwa a ap chaje / Voice loading…'
+        else:
+            read_hint.title = f'Chwazi yon tèks, kenbe {read_name} pou tande l'
 
     service.on_state = refresh
 
@@ -360,8 +455,12 @@ def run_menu(service, key_name):
         rumps.quit_application()
 
     toggle.set_callback(toggled)
-    hint.set_callback(None)                        # a label, not a button
-    app.menu = [toggle, hint, None, rumps.MenuItem('Kite / Quit', callback=quit_app)]
+    hint.set_callback(None)                        # labels, not buttons
+    read_hint.set_callback(None)
+    app.menu = [toggle, hint, read_hint, None, rumps.MenuItem('Kite / Quit', callback=quit_app)]
+    # The voice finishes loading seconds after the service starts, so the label has to catch up. Repeat
+    # the state rather than assuming one, or this would clear the icon in the middle of a recording.
+    rumps.Timer(lambda _: refresh(current['state']), 2).start()
 
     # Start on launch: a dictation app that opens switched off is one you forget to switch on.
     toggled(None)
@@ -375,10 +474,17 @@ def main():
                    help='hold this to dictate (default: right_cmd; Option is the Kreyòl accent key)')
     p.add_argument('--port', type=int, default=8179,
                    help='whisper-server port; 8178 shares the one the offline page starts')
+    p.add_argument('--read-key', default='left_cmd', choices=sorted(KEY_NAMES),
+                   help='hold this alone to read the selected text aloud (default: left_cmd)')
+    p.add_argument('--voice', default='kreyol_f1',
+                   help='kreyol_f1, kreyol_f2, kreyol_f3, kreyol_m1 or kreyol_v5')
+    p.add_argument('--no-read', action='store_true', help='dictation only; do not load the voice')
     p.add_argument('--no-punct', action='store_true', help='do not add a full stop')
     p.add_argument('--no-menu', action='store_true', help='no menu bar icon, just the terminal')
     p.add_argument('--file', help='transcribe this wav and exit, instead of listening to the mic')
     args = p.parse_args()
+    if args.read_key == args.key:
+        p.error('--read-key and --key must be different')
 
     if args.file:
         server = start_server(args.port)
@@ -413,7 +519,8 @@ def main():
         sys.exit('\n' + message + '\n\nTo check the rest works without granting anything:\n'
                  '  python3 dikte/dikte.py --file samples/j1_16k.wav')
 
-    service = Service(args.port, args.key, punctuate=not args.no_punct)
+    service = Service(args.port, args.key, punctuate=not args.no_punct,
+                      read_key=None if args.no_read else args.read_key, voice=args.voice)
     try:
         (run_headless if args.no_menu else run_menu)(service, args.key)
     finally:

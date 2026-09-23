@@ -1,8 +1,46 @@
-# Dikte — Kreyòl dictation, on this machine
+# Dikte — Kreyòl dictation and reading, on this machine
 
-Hold a key, speak Kreyòl, release. The text appears where your cursor is, in any app. Nothing leaves
-the laptop: the audio goes to a local `whisper-server` holding the m3 model in memory, and the text goes
-straight to the front app.
+Two keys, opposite directions, in any app. Nothing leaves the laptop.
+
+| | |
+|---|---|
+| **Hold Right Command**, speak, release | Your Kreyòl appears where the cursor is |
+| **Select text, hold Left Command** | It is read aloud in a Kreyòl voice |
+
+The speech goes to a local `whisper-server` holding the m3 model in memory; the reading goes to a local
+`llama-tts` holding the Kreyòl voice model.
+
+## Reading the selection
+
+Hold Left Command on its own for half a second and whatever is selected is read aloud. Hold it again to
+stop. Nothing can read another app's selection directly, so Dikte copies it (Cmd+C) and puts your
+clipboard back.
+
+**Left Command is also Cmd+C, Cmd+V and Cmd+Tab**, which is the whole difficulty. Reading fires only
+when the key went down by itself, nothing else was pressed while it was down, and it stayed down at
+least half a second. A shortcut fails the second test; a tap fails the third. `dikte/test_dikte.py`
+checks exactly that, because the failure mode is not an error message — it is a voice reading your
+clipboard every time you copy something.
+
+Making speech runs at about 1.1 to 1.3 times real time: fast enough to stay ahead of playback, not fast
+enough to make a paragraph before it starts. So the selection is cut into blocks that start small and
+grow, each at most about 1.35 times the last, which is all that can be made while the previous one
+plays. Measured on a 222-character paragraph: the first words at **3.7 s**, then no silence at all.
+
+| block | chars | made in | audio | silence before it |
+|---|---|---|---|---|
+| 0 | 42 | 3.7s | 5.2s | first sound at 3.7s |
+| 1 | 55 | 4.8s | 6.1s | none |
+| 2 | 70 | 6.4s | 9.0s | none |
+| 3 | 52 | 5.2s | 6.6s | none |
+
+Going straight to full-size blocks instead puts a 2.2-second gap after the first one.
+
+The voice model takes 8.3 s to load, so it is loaded in the background when the service starts rather
+than on your first selection. `--voice` picks between `kreyol_f1`, `kreyol_f2`, `kreyol_f3`,
+`kreyol_m1` and `kreyol_v5`; `--no-read` skips the voice entirely and saves its 1.5 GB.
+
+## Dictation
 
 ```bash
 ./build-dikte-app.sh                    # build Dikte.app, then open it from the Finder
@@ -19,14 +57,14 @@ icon, no window, no terminal left open. The icon is the state.
 
 | | |
 |---|---|
-| 🎙 | listening for the key |
-| 🔴 | recording |
-| ⋯ | starting, or transcribing |
+| 🎙 | listening for the keys |
+| 🔴 | recording you |
+| 🔊 | reading the selection |
+| ⋯ | starting, or working |
 | ⏸ | service stopped |
 
-Its one menu item starts and stops the service. Stopping it shuts down `whisper-server` too, giving
-back the 547 MB the model holds, and starting it again reloads in a couple of seconds. Quit from the
-same menu.
+Its one menu item starts and stops the service. Stopping shuts down both models too — the 547 MB
+speech model and the 1.5 GB voice — and starting reloads them. Quit from the same menu.
 
 The app is a thin launcher around `dikte/dikte.py` in this folder, not a copy, so editing the script
 changes the app without rebuilding. The interpreter and folder are written in as absolute paths,
@@ -78,8 +116,13 @@ and exits.
 ## Why Right Command
 
 Option is how macOS types Kreyòl accents — è, ò, à. Holding Option to dictate would fight the keyboard
-you use to write the language, so the default is Right Command. `--key` takes `right_cmd`, `right_ctrl`,
-`right_shift`, `right_alt`, or `f13` through `f15`.
+you use to write the language, so the default is Right Command, with Left Command for reading.
+
+`--key` and `--read-key` both take `right_cmd`, `right_ctrl`, `right_shift`, `right_alt`, `left_cmd`,
+`left_ctrl`, or `f13` through `f15`, and must differ. The right-hand keys are the safer ones to hold:
+dictation starts the instant the key goes down, so binding it to a key you use in shortcuts would
+record every time you pressed it. Reading waits for a deliberate hold, which is why Left Command is
+safe for it and would not be safe for dictation.
 
 ## What the text looks like, and why
 
