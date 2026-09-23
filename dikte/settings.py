@@ -33,6 +33,23 @@ FIELDS = {
 # speaker is only another reference clip and takes effect on the next reading.
 NEEDS_RESTART = {'stt_model', 'tts_model', 'tts_mmproj'}
 
+# What is published, so the menu can offer a model that is not on this machine yet and fetch it. Sizes
+# are megabytes as the Hub reports them, shown before anything is downloaded because the difference
+# between these is gigabytes.
+REPOS = {'stt_model': 'jsbeaudry/oswald-large-v3-turbo-m3-ggml',
+         'tts_model': 'jsbeaudry/qwen3-tts-1.7b-kreyol-GGUF',
+         'tts_mmproj': 'jsbeaudry/qwen3-tts-1.7b-kreyol-GGUF'}
+CATALOGUE = {
+    'stt_model': [('ggml-oswald-m3-q5_0.bin', 574, 'recommended'),
+                  ('ggml-oswald-m3-q8_0.bin', 874, ''),
+                  ('ggml-oswald-m3-f16.bin', 1625, 'reference')],
+    'tts_model': [('qwen3-tts-1.7b-kreyol-Q4_K_M.gguf', 1036, 'recommended'),
+                  ('qwen3-tts-1.7b-kreyol-Q8_0.gguf', 1848, ''),
+                  ('qwen3-tts-1.7b-kreyol-f16.gguf', 3473, 'reference; re-quantise from this')],
+    'tts_mmproj': [('mmproj-qwen3-tts-1.7b-kreyol-Q8_0.gguf', 493, 'recommended'),
+                   ('mmproj-qwen3-tts-1.7b-kreyol-f16.gguf', 701, '')],
+}
+
 _lock = threading.RLock()
 _values = None
 
@@ -62,6 +79,76 @@ def choices(name):
 def label(path):
     """What to call a model in a menu: its filename without the extension."""
     return os.path.splitext(os.path.basename(path))[0]
+
+
+def options(name):
+    """Everything this setting could be: published files, and anything else already in the folder.
+
+    A published file that is not on this machine is still offered, with its size, so choosing between
+    quantisations does not mean first knowing they exist. Downloading one is `fetch`.
+    """
+    _, _, folder, _ = FIELDS[name]
+    out, seen = [], set()
+    for filename, mb, note in CATALOGUE.get(name, []):
+        path = os.path.join(folder, filename)
+        seen.add(path)
+        out.append({'path': path, 'label': label(path), 'mb': mb, 'note': note,
+                    'local': os.path.exists(path)})
+    for path in choices(name):                  # anything dropped in by hand, or an older download
+        if path not in seen:
+            size = os.path.getsize(path) / 1e6 if os.path.exists(path) else 0
+            out.append({'path': path, 'label': label(path), 'mb': round(size), 'note': '',
+                        'local': True})
+    return out
+
+
+def room_for(mb, folder):
+    """Whether there is disk for a download, with a little to spare."""
+    import shutil
+    try:
+        return shutil.disk_usage(folder).free > mb * 1e6 * 1.15
+    except Exception:
+        return True                             # cannot tell; let the download itself complain
+
+
+def fetch(name, path, progress=None):
+    """Download a published file into the folder this setting reads from.
+
+    Returns the path. `progress` is called with a fraction, worked out by watching the part-file
+    huggingface_hub writes, because it offers no callback of its own.
+    """
+    from huggingface_hub import hf_hub_download
+
+    _, _, folder, _ = FIELDS[name]
+    filename = os.path.basename(path)
+    wanted = next((mb for f, mb, _ in CATALOGUE.get(name, []) if f == filename), 0)
+    if wanted and not room_for(wanted, folder):
+        raise RuntimeError(f'not enough disk for {filename} ({wanted:,} MB)')
+
+    stop = threading.Event()
+
+    def watch():
+        while not stop.wait(0.5):
+            biggest = 0
+            for root, _, files in os.walk(os.path.join(folder, '.cache')):
+                for f in files:
+                    if f.endswith('.incomplete'):
+                        try:
+                            biggest = max(biggest, os.path.getsize(os.path.join(root, f)))
+                        except OSError:
+                            pass
+            if progress and wanted:
+                progress(min(0.99, biggest / (wanted * 1e6)))
+
+    if progress:
+        threading.Thread(target=watch, daemon=True).start()
+    try:
+        got = hf_hub_download(REPOS[name], filename, local_dir=folder)
+    finally:
+        stop.set()
+    if progress:
+        progress(1.0)
+    return got
 
 
 def clean(changes):

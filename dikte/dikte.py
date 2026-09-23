@@ -464,12 +464,54 @@ def settings_menu(service, on_change):
             on_change()
         return handler
 
+    busy = {'name': None}                          # one download at a time
+
+    def title_for(option):
+        note = f' — {option["note"]}' if option['note'] else ''
+        if option['local']:
+            return f'{option["label"]}{note}'
+        return f'{option["label"]} — {option["mb"]:,} MB, telechaje{note}'
+
+    def download(name, option, item):
+        """Fetch a published model, then switch to it. Gigabytes and minutes, so it asks first."""
+        def handler(_):
+            if busy['name']:
+                rumps.alert('Dikte', 'Gen yon telechajman k ap fèt deja. / A download is already running.')
+                return
+            if rumps.alert('Dikte', f'Telechaje {option["label"]}?\n\n{option["mb"]:,} MB '
+                                    f'soti nan {settings.REPOS[name]}.',
+                           ok='Telechaje / Download', cancel='Anile / Cancel') != 1:
+                return
+            busy['name'] = name
+            plain = item.title
+
+            def run():
+                try:
+                    settings.fetch(name, option['path'],
+                                   progress=lambda f: setattr(item, 'title',
+                                                              f'{option["label"]} — {f * 100:.0f}%'))
+                    option['local'] = True
+                    item.title = title_for(option)
+                    item.set_callback(apply(name, option['path']))
+                    marks.append((name, option['path'], item))
+                    apply(name, option['path'])(None)     # having fetched it, use it
+                except Exception as error:
+                    item.title = plain
+                    rumps.alert('Dikte', f'{type(error).__name__}: {error}')
+                finally:
+                    busy['name'] = None
+            threading.Thread(target=run, daemon=True).start()
+        return handler
+
     for name, (_, title, folder, suffix) in settings.FIELDS.items():
         group = rumps.MenuItem(title)
-        found = settings.choices(name)
-        for path in found:
-            item = rumps.MenuItem(settings.label(path), callback=apply(name, path))
-            marks.append((name, path, item))
+        found = settings.options(name)
+        for option in found:
+            item = rumps.MenuItem(title_for(option))
+            item.set_callback(apply(name, option['path']) if option['local']
+                              else download(name, option, item))
+            if option['local']:
+                marks.append((name, option['path'], item))
             group.add(item)
         if not found:
             empty = rumps.MenuItem(f'pa gen {suffix} nan {os.path.basename(folder)}/')

@@ -58,10 +58,25 @@ machine that could fill it. A tick marks the one in use.
 | Voice projector | `kreyol-tts/` | `.gguf` named `mmproj*` |
 | Who reads | `kreyol-tts/voices/` | `.wav` |
 
-Drop another quantisation beside the current one — `ggml-oswald-m3-q8_0.bin`, say, or a different
-`-Q5_K_M.gguf` — and it appears in the menu next time it opens. Nothing is copied or converted here;
-`convert/` does that and `setup.sh` fetches the published ones. **Open model folders** in the same
-submenu reveals both in the Finder.
+Every published quantisation is listed, whether or not it is on this machine. The ones that are not
+show their size and download when chosen, into the folder the setting reads from:
+
+| Speech to text | | | Voice | | |
+|---|---|---|---|---|---|
+| `ggml-oswald-m3-q5_0` | 574 MB | recommended | `qwen3-tts-1.7b-kreyol-Q4_K_M` | 1,036 MB | recommended |
+| `ggml-oswald-m3-q8_0` | 874 MB | | `qwen3-tts-1.7b-kreyol-Q8_0` | 1,848 MB | |
+| `ggml-oswald-m3-f16` | 1,625 MB | reference | `qwen3-tts-1.7b-kreyol-f16` | 3,473 MB | reference; re-quantise from this |
+
+The projector has two: `mmproj-…-Q8_0` at 493 MB (recommended) and `mmproj-…-f16` at 701 MB. A talker
+and a projector are chosen separately, and the sizes are shown before anything is fetched because the
+difference between them is gigabytes.
+
+Downloading asks first, checks there is disk for it, counts up in the menu item while it runs, and
+switches to the model once it lands. One at a time. Both repositories are private, so this uses the
+login `setup.sh` already asked for; without it the download says so rather than failing quietly.
+
+Anything you drop into those folders by hand appears too. Nothing is converted here — `convert/` does
+that — and **Open model folders** reveals both in the Finder.
 
 Changing the speech model or the voice means loading it again, so the service restarts (a couple of
 seconds for speech, about eight for the voice). Changing who reads is only another reference clip, so
