@@ -7,6 +7,7 @@ fine-tuned Whisper model **oswald-large-v3-turbo-m3** (whisper.cpp), and text to
 | Command | What it does |
 |---|---|
 | `./start-page.sh` | Opens the page with all the tools below. Ctrl+C in the terminal stops it. |
+| `./start-dikte.sh` | Dictation anywhere on the Mac: hold Right Command, speak Kreyòl, release, and the text lands at your cursor. Needs Microphone and Accessibility permission — see `dikte/README.md`. |
 | `./transcribe.sh recording.m4a` | Speech to text on the command line. Any format ffmpeg reads. |
 | `./speak.sh "Bonjou!" kreyol_m1 out.wav` | Text to speech on the command line. Voices: `kreyol_f1`, `kreyol_f2`, `kreyol_f3`, `kreyol_m1`, `kreyol_v5`. |
 
@@ -183,7 +184,8 @@ programs loaded:
 ## What is in here
 
 - `app/`: the page and its server (above).
-- `start-page.sh`, `transcribe.sh`, `speak.sh`, `setup.sh`, `llama-tts-serve.patch`.
+- `dikte/`: the dictation app — a held key, the mic, and the text pasted at the cursor.
+- `start-page.sh`, `start-dikte.sh`, `transcribe.sh`, `speak.sh`, `setup.sh`, `llama-tts-serve.patch`.
 - `convert/`: the RunPod pipeline that converted both models, checked them against PyTorch, and
   published them.
 
