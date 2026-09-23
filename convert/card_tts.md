@@ -23,6 +23,7 @@ Haitian Creole (Kreyòl ayisyen) text-to-speech that runs offline with [llama.cp
 |---|---|---|
 | `qwen3-tts-1.7b-kreyol-Q4_K_M.gguf` | 1,036 MB | talker, **recommended** |
 | `qwen3-tts-1.7b-kreyol-Q8_0.gguf` | 1,848 MB | talker |
+| `qwen3-tts-1.7b-kreyol-Q3_K_M.gguf` | 826 MB | talker, smallest that works |
 | `qwen3-tts-1.7b-kreyol-f16.gguf` | 3,473 MB | talker, reference; re-quantise from this |
 | `mmproj-qwen3-tts-1.7b-kreyol-Q8_0.gguf` | 493 MB | mmproj, **recommended** |
 | `mmproj-qwen3-tts-1.7b-kreyol-f16.gguf` | 701 MB | mmproj |
@@ -39,6 +40,29 @@ Every sentence was synthesised, transcribed with [oswald-large-v3-turbo-m3](http
 | **Q4_K_M talker + Q8_0 mmproj** | **2.80** | 2.95 | 2.64 |
 
 The 4-bit talker matches the original. Sampling is random, so these numbers move by roughly half a point between runs at this size; across three runs with different seeds and sentence sets, the original scored anywhere from 1.5% to 3.3%. On an RTX 4090 the GGUF generates at 0.41–0.44 of real time against 0.66 for PyTorch.
+
+### How small the talker can go
+
+A separate run on an Apple M3 Pro, judged with the **ggml** m3 through `whisper-server` rather than the
+PyTorch m3 above, so its numbers belong to each other and not to the table above. Same 72 utterances.
+
+| Variant | Size | CER | WER |
+|---|---|---|---|
+| Q4_K_M | 1,036 MB | 2.95 | 10.97 |
+| Q3_K_M | 826 MB | 3.51 | 12.90 |
+| Q2_K | 632 MB | — | unusable |
+
+**Q3_K_M works.** It costs 0.56 CER for 210 MB, which is the same size as the run-to-run variation
+described above — so read it as "not clearly worse and not clearly equal", not as a measured
+degradation. Deciding properly would take several hundred utterances. Q4_K_M remains the recommendation;
+Q3_K_M is there for a machine where 210 MB matters.
+
+**Q2_K does not, and is not published.** Asked for a seven-second sentence it produced 41 seconds of
+audio transcribing as `bot li li li li li ... gen怎么 li li ... дух solèy telesè`: degenerate looping,
+foreign scripts, and no ability to stop. At 1.7B parameters two bits takes away both the model's
+grounding and its stop token. One sentence settled it; the 72-utterance run was not needed. An IQ2
+quantisation with an importance matrix built from Kreyòl calibration text might fare better, but that is
+a project rather than a quantisation.
 
 ## Usage
 

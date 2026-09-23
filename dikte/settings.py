@@ -44,6 +44,7 @@ CATALOGUE = {
                   ('ggml-oswald-m3-q8_0.bin', 874, ''),
                   ('ggml-oswald-m3-f16.bin', 1625, 'reference')],
     'tts_model': [('qwen3-tts-1.7b-kreyol-Q4_K_M.gguf', 1036, 'recommended'),
+                  ('qwen3-tts-1.7b-kreyol-Q3_K_M.gguf', 826, 'smallest that works'),
                   ('qwen3-tts-1.7b-kreyol-Q8_0.gguf', 1848, ''),
                   ('qwen3-tts-1.7b-kreyol-f16.gguf', 3473, 'reference; re-quantise from this')],
     'tts_mmproj': [('mmproj-qwen3-tts-1.7b-kreyol-Q8_0.gguf', 493, 'recommended'),
