@@ -188,9 +188,20 @@ class Dictation:
             return                 # holding a key repeats on_press; only the first one counts
         with self.lock:
             self.frames, self.recording = [], True
-        self.stream = sd.RawInputStream(samplerate=RATE, channels=1, dtype='int16',
-                                        callback=self._collect)
-        self.stream.start()
+        try:
+            self.stream = sd.RawInputStream(samplerate=RATE, channels=1, dtype='int16',
+                                            callback=self._collect)
+            self.stream.start()
+        except Exception as error:
+            # Losing this exception into the listener thread is how "holding the key does nothing"
+            # happens with no explanation. A denied microphone is the usual cause.
+            self.recording = False
+            print(f'  cannot open the microphone: {type(error).__name__}: {error}\n'
+                  f'  System Settings → Privacy & Security → Microphone, add the app running this,\n'
+                  f'  then quit it completely and reopen it.', flush=True)
+            cue('empty')
+            self.on_state('idle')
+            return
         self.on_state('recording')
         cue('start')
 
@@ -217,9 +228,18 @@ class Dictation:
         self.on_state('working')
         started = time.time()
         try:
-            text = tidy(whisper_text(data, self.port), self.punctuate)
+            # The microphone gives raw PCM; the server decodes files, so it needs the RIFF header.
+            text = tidy(whisper_text(wav_bytes(data), self.port), self.punctuate)
         except Exception as error:
-            print(f'  transcription failed: {error}')
+            failed = os.path.join(ROOT, 'dikte/failed.wav')
+            try:
+                with open(failed, 'wb') as f:
+                    f.write(wav_bytes(data))
+            except Exception:
+                failed = None
+            print(f'  transcription failed: {type(error).__name__}: {error}'
+                  + (f'\n  the audio was kept at {failed} — play it to hear what was captured'
+                     if failed else ''), flush=True)
             cue('empty')
             self.on_state('idle')
             return
@@ -289,9 +309,22 @@ def main():
         from pynput import keyboard
         dictation = Dictation(args.port, punctuate=not args.no_punct)
         hotkey = getattr(keyboard.Key, KEY_NAMES[args.key])
-        listener = keyboard.Listener(on_press=lambda k: k == hotkey and dictation.start(),
-                                     on_release=lambda k: k == hotkey and dictation.stop())
+
+        def on(action):
+            """An exception here would stop the listener and print nothing, leaving the key dead."""
+            def handler(key):
+                if key != hotkey:
+                    return
+                try:
+                    action()
+                except Exception as error:
+                    print(f'  {type(error).__name__}: {error}', flush=True)
+            return handler
+
+        listener = keyboard.Listener(on_press=on(dictation.start), on_release=on(dictation.stop))
         listener.start()
+        if not listener.running:
+            sys.exit('the key listener would not start; run python3 dikte/diagnose.py')
         (run_headless if args.no_menu else run_menu)(dictation, args.key)
     finally:
         if server:
