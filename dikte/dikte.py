@@ -27,6 +27,7 @@ Three things worth knowing:
 import argparse
 import io
 import json
+import math
 import os
 import subprocess
 import sys
@@ -36,6 +37,8 @@ import urllib.error
 import urllib.request
 import uuid
 import wave
+
+import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WHISPER_SERVER = os.path.join(ROOT, 'whisper.cpp/build/bin/whisper-server')
@@ -53,16 +56,20 @@ KEY_NAMES = {'right_cmd': 'cmd_r', 'right_ctrl': 'ctrl_r', 'right_shift': 'shift
              'right_alt': 'alt_r', 'left_cmd': 'cmd_l', 'left_ctrl': 'ctrl_l',
              'f13': 'f13', 'f14': 'f14', 'f15': 'f15'}
 
-SOUNDS = {'start': '/System/Library/Sounds/Tink.aiff',
-          'done': '/System/Library/Sounds/Pop.aiff',
-          'empty': '/System/Library/Sounds/Funk.aiff'}
+# The page answers this with its Grille: dots lighting from the centre out with the voice, red going
+# in, ink coming out. No sound anywhere — a beep over your own dictation is noise, and a beep in a
+# meeting is worse. The menu bar has one character to work with, so the level goes there.
+METER = ' ▁▂▃▄▅▆▇█'
+FLOOR = 0.004              # below this is a quiet room, not speech
 
 
-def cue(name):
-    """A sound, because in push-to-talk you are looking at the other app, not at this one."""
-    path = SOUNDS.get(name)
-    if path and os.path.exists(path):
-        subprocess.Popen(['afplay', path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def meter(level):
+    """One character standing for how loud it is now, on the same scale the page paints."""
+    if level <= FLOOR:
+        return METER[0]
+    # Loudness is logarithmic; a linear bar would sit near the bottom for all ordinary speech.
+    loud = max(0.0, min(1.0, (math.log10(level) - math.log10(FLOOR)) / (math.log10(0.5) - math.log10(FLOOR))))
+    return METER[min(len(METER) - 1, 1 + int(loud * (len(METER) - 2)))]
 
 
 def wav_bytes(frames, rate=RATE):
@@ -209,15 +216,27 @@ class Holds:
 class Dictation:
     """Hold the key: record. Release it: transcribe, tidy, paste."""
 
-    def __init__(self, port, punctuate=True, on_state=None):
+    def __init__(self, port, punctuate=True, on_state=None, on_level=None):
         self.port, self.punctuate, self.on_state = port, punctuate, on_state or (lambda s: None)
+        self.on_level = on_level or (lambda level: None)
         self.frames, self.stream, self.lock = [], None, threading.Lock()
         self.recording = False
+        self.last_level = 0.0
 
     def _collect(self, data, frames, timing, status):
         with self.lock:
-            if self.recording:
-                self.frames.append(bytes(data))
+            if not self.recording:
+                return
+            chunk = bytes(data)
+            self.frames.append(chunk)
+        # The callback runs about thirty times a second; the menu bar does not need that.
+        now = time.monotonic()
+        if now - self.last_level < 0.08:
+            return
+        self.last_level = now
+        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+        if samples.size:
+            self.on_level(float(np.sqrt((samples ** 2).mean())) / 32768)
 
     def start(self):
         import sounddevice as sd
@@ -236,11 +255,9 @@ class Dictation:
             print(f'  cannot open the microphone: {type(error).__name__}: {error}\n'
                   f'  System Settings → Privacy & Security → Microphone, add the app running this,\n'
                   f'  then quit it completely and reopen it.', flush=True)
-            cue('empty')
             self.on_state('idle')
             return
         self.on_state('recording')
-        cue('start')
 
     def cancel(self):
         """Throw the recording away: the key turned out to be part of a shortcut, not dictation."""
@@ -290,17 +307,14 @@ class Dictation:
             print(f'  transcription failed: {type(error).__name__}: {error}'
                   + (f'\n  the audio was kept at {failed} — play it to hear what was captured'
                      if failed else ''), flush=True)
-            cue('empty')
             self.on_state('idle')
             return
         elapsed = time.time() - started
         if not text:
             print(f'  ({seconds:.1f}s, nothing heard)')
-            cue('empty')
         else:
             print(f'  [{seconds:.1f}s → {elapsed:.2f}s] {text}')
             paste(text)
-            cue('done')
         self.on_state('idle')
 
 
@@ -317,6 +331,7 @@ class Service:
         self.port, self.key, self.punctuate = port, key, punctuate
         self.read_key, self.voice = read_key, voice
         self.on_state = on_state or (lambda state: None)
+        self.on_level = lambda level: None
         self.server = self.listener = self.dictation = self.reader = None
 
     @property
@@ -330,13 +345,15 @@ class Service:
         self.server = start_server(self.port)      # None when reusing a server already listening
         from pynput import keyboard
         # The lambda defers to the current on_state, so the menu can replace it after construction.
-        self.dictation = Dictation(self.port, self.punctuate, lambda state: self.on_state(state))
+        self.dictation = Dictation(self.port, self.punctuate, lambda state: self.on_state(state),
+                                   on_level=lambda level: self.on_level(level))
         dictate_key = getattr(keyboard.Key, KEY_NAMES[self.key])
         read_key = getattr(keyboard.Key, KEY_NAMES[self.read_key]) if self.read_key else None
 
         if read_key is not None:
             from reader import Reader
-            self.reader = Reader(self.voice, on_state=lambda state: self.on_state(state))
+            self.reader = Reader(self.voice, on_state=lambda state: self.on_state(state),
+                                 on_level=lambda level: self.on_level(level))
             self.reader.preload()          # 8.3 s, in the background, so the first selection is not slow
 
         def guard(action):
@@ -374,7 +391,6 @@ class Service:
         note = self.reader.toggle() if self.reader else 'reading is switched off'
         if note:
             print(f'  {note}', flush=True)
-            cue('empty')
 
     def stop(self):
         if self.listener:
@@ -441,6 +457,12 @@ def run_menu(service, key_name):
             read_hint.title = f'Chwazi yon tèks, kenbe {read_name} pou tande l'
 
     service.on_state = refresh
+
+    def level(value):
+        if current['state'] in ('recording', 'speaking'):
+            app.title = meter(value)
+
+    service.on_level = level
 
     def toggled(_):
         try:

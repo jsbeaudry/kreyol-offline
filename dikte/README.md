@@ -134,10 +134,23 @@ full stop when it is three words or more. It does **not** place commas inside a 
 turn `uit è trant` into `8:30`. Restoring punctuation properly needs a Kreyòl punctuation model, which
 does not exist yet. `--no-punct` turns off even the full stop.
 
-## Sounds
+## The meter, not beeps
 
-Push-to-talk means you are looking at the other app, not at this one, so each state has a sound: a tick
-when recording starts, a pop when text is pasted, and a lower tone when nothing was heard.
+An earlier version played system sounds at each step. That was wrong for the same reason the page has
+none: a beep over your own dictation is noise, and a beep in a meeting is worse. The page answers this
+with its **Grille** — dots lighting from the centre out with the voice, red going in, ink coming out.
+
+Dikte does the same thing with the one character the menu bar gives it. While you speak, the icon
+becomes a live level meter reading off the microphone; while it reads to you, the same meter follows the
+voice it is playing. `afplay` reports nothing about what it plays, so those levels are read off the
+block's own audio and stepped through in time with it.
+
+```
+         ▄▄▆▆▆▃▅▅ ▅▅ ▄▅▅▅▆▆▃ ▄▅▆▄▃▅▅▄▂▃▅▂▁▅▅▅▅▃ ▄▅▄▃▄▄▅▅▄▄▅▄▁
+```
+
+That is a real 5.7-second Kreyòl clip: the silence at each end is the silence in the file. The scale is
+logarithmic, because a linear one leaves ordinary speech sitting near the bottom.
 
 ## Ports
 

@@ -118,6 +118,43 @@ def check_blocks_start_small_and_grow():
     print(f'  empty, tiny, and a {len(long_text):,}-char selection all handled')
 
 
+def check_meter():
+    """Quiet must read as blank and loud as full, with nothing going backwards in between."""
+    assert dikte.meter(0.0) == ' ' and dikte.meter(dikte.FLOOR) == ' ', 'a quiet room is not silent'
+    assert dikte.meter(1.0) == dikte.METER[-1]
+    rungs = [dikte.METER.index(dikte.meter(v))
+             for v in (0.0, 0.005, 0.01, 0.03, 0.08, 0.2, 0.5, 1.0)]
+    assert rungs == sorted(rungs), f'the meter goes backwards: {rungs}'
+    assert len(set(rungs)) >= 5, f'ordinary speech barely moves it: {rungs}'
+    # Real speech should land in the middle, not pinned at either end.
+    middle = dikte.METER.index(dikte.meter(0.07))
+    assert 2 <= middle <= len(dikte.METER) - 2, f'speech sits at the edge of the scale: {middle}'
+    print(f'  0 to 1 ->' + ''.join(dikte.meter(v) for v in
+                                   (0, 0.005, 0.01, 0.03, 0.08, 0.2, 0.5, 1.0)) + '  (speech lands mid-scale)')
+
+
+def check_envelope():
+    import wave
+    import numpy as np
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'samples', 'j1_16k.wav')
+    if not os.path.exists(path):
+        print('  no sample to check the envelope against; skipped')
+        return
+    with wave.open(path, 'rb') as w:
+        seconds = w.getnframes() / w.getframerate()
+    levels = reader.envelope(path)
+    assert abs(len(levels) * reader.STEP - seconds) < reader.STEP * 2, 'envelope does not match duration'
+    assert max(levels) > 0.01, 'the envelope found no voice'
+    assert min(levels) < max(levels) / 4, 'the envelope is flat; it is not following anything'
+    # A file that is not there, or not audio, must not take the reading down with it.
+    assert reader.envelope('/nonexistent.wav') == [0.0]
+    assert reader.envelope(__file__) == [0.0]
+    print(f'  {seconds:.1f}s of speech -> {len(levels)} steps, quietest {min(levels):.4f}, '
+          f'loudest {max(levels):.4f}; a missing or non-audio file gives silence')
+
+
 def main():
     print('key holds: what a press meant')
     check_shortcuts_never_read()
@@ -125,6 +162,9 @@ def main():
     check_one_at_a_time()
     print('\nblocks: how a selection is cut for reading')
     check_blocks_start_small_and_grow()
+    print('\nthe meter that replaced the beeps')
+    check_meter()
+    check_envelope()
     print('\nall checks passed')
 
 

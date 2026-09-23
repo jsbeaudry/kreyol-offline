@@ -19,6 +19,9 @@ import subprocess
 import sys
 import threading
 import time
+import wave
+
+import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LLAMA_TTS = os.path.join(ROOT, 'llama.cpp/build/bin/llama-tts')
@@ -37,6 +40,7 @@ MAX_CHARS = 5000         # a whole document selected by accident should not beco
 # to make the next one up to about 1.37 times its length. Grow slower than that and the sound never
 # catches up with the making; jump straight to full-size blocks and there is a gap after the first.
 GROWTH = 1.35
+STEP = 0.08              # how often the level is reported while a block plays
 
 sys.path.insert(0, os.path.join(ROOT, 'kreyol-tts'))
 
@@ -62,6 +66,26 @@ def blocks(text):
     if held:
         out.append(held)
     return out
+
+
+def envelope(path, step=STEP):
+    """How loud the block is, step by step, so the meter can follow a voice it is not recording.
+
+    afplay reports nothing about what it is playing, so the levels are read off the file instead and
+    stepped through in time with it.
+    """
+    try:
+        with wave.open(path, 'rb') as w:
+            rate = w.getframerate()
+            samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32)
+    except Exception:
+        return [0.0]
+    width = max(1, int(rate * step))
+    usable = len(samples) - len(samples) % width
+    if usable <= 0:
+        return [0.0]
+    frames = samples[:usable].reshape(-1, width)
+    return (np.sqrt((frames ** 2).mean(axis=1)) / 32768).tolist()
 
 
 def selection(timeout=0.6):
@@ -101,8 +125,9 @@ def selection(timeout=0.6):
 class Reader:
     """One llama-tts kept loaded, making blocks while the previous one plays."""
 
-    def __init__(self, voice='kreyol_f1', on_state=None, tmp=None):
+    def __init__(self, voice='kreyol_f1', on_state=None, tmp=None, on_level=None):
         self.voice, self.on_state = voice, on_state or (lambda state: None)
+        self.on_level = on_level or (lambda level: None)
         self.tmp = tmp or os.path.join(ROOT, 'dikte/.audio')
         self.proc = self.player = None
         self.replies = queue.Queue()
@@ -216,12 +241,18 @@ class Reader:
                 path = made.get()
                 if path is None or self.cancel.is_set():
                     break
+                levels = envelope(path)
                 self.player = subprocess.Popen(['afplay', path], stdout=subprocess.DEVNULL,
                                                stderr=subprocess.DEVNULL)
-                self.player.wait()
+                started = time.monotonic()
+                while self.player.poll() is None:
+                    step = int((time.monotonic() - started) / STEP)
+                    self.on_level(levels[step] if step < len(levels) else 0.0)
+                    time.sleep(STEP)
                 self.player = None
         finally:
             self.cancel.set()                              # stop the producer if playback ended first
+            self.on_level(0.0)
             self.speaking.clear()
             self.on_state('idle')
 
