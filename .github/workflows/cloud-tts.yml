@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       cuda_archs:
-        description: 'CUDA architectures (75=T4, 80=A100, 86=A10G, 89=L4). Fewer builds faster.'
-        default: '75;89'
+        description: 'CUDA architectures (86=Ampere (A5000, 3090, A4000, A40), 89=Ada (L4, RTX 2000 Ada, 4090)). Fewer builds faster.'
+        default: '86;89'
       tag:
         description: 'Extra tag for this image'
         default: ''
@@ -55,7 +55,7 @@ jobs:
           push: true
           platforms: linux/amd64
           build-args: |
-            CUDA_ARCHS=${{ inputs.cuda_archs || '75;89' }}
+            CUDA_ARCHS=${{ inputs.cuda_archs || '86;89' }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
