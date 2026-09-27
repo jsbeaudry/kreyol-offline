@@ -1,4 +1,4 @@
-/* Reglaj: how the tools cut speech into lines and how the voice spaces a document. */
+/* Reglaj: which models run, how speech is cut into lines, and how the voice spaces a document. */
 import { $, el, get, post, say, fail } from "./common.js";
 
 const GROUPS = [
@@ -17,6 +17,71 @@ const LABELS = {
   paragraph_pause_s: ["Poz ant paragraf yo (s)", "silence between paragraphs"],
 };
 let fields = [];
+
+/* ---------- which models run ---------- */
+/* A model is not a number: it is a file that may or may not be here, and changing one means the
+   server loads it again. So these are lists, not inputs, and saving happens on the click rather than
+   with the Sove button. */
+let models = [];
+
+function option(spec, opt) {
+  if (opt.rejected) {
+    return el("li", { class: "model bad" }, el("span", {}, opt.label),
+      el("em", { class: "meta" }, opt.rejected));
+  }
+  const chosen = opt.path === spec.current;
+  const what = opt.local ? (opt.note || "") : `${opt.mb.toLocaleString()} MB — telechaje / download`;
+  const b = el("button", { class: chosen ? "model-pick on" : "model-pick", type: "button" },
+    el("span", {}, chosen ? `\u2713 ${opt.label}` : opt.label),
+    what ? el("em", { class: "meta" }, what) : "");
+  b.addEventListener("click", () => (opt.local ? choose(spec, opt) : download(spec, opt)));
+  return el("li", { class: "model" }, b);
+}
+
+async function choose(spec, opt) {
+  const st = $("#set-status");
+  if (opt.path === spec.current) return;
+  try {
+    const j = await post("/api/settings/model", { name: spec.name, path: opt.path }, true);
+    models = j.models;
+    drawModels();
+    say(st, `${opt.label} ap chaje… (loading; the page refuses work until it is ready.)`);
+  } catch (e) { fail(st, e); }
+}
+
+async function download(spec, opt) {
+  const st = $("#set-status");
+  if (!confirm(`Telechaje ${opt.label}? ${opt.mb.toLocaleString()} MB soti nan ${spec.repo}.`)) return;
+  try {
+    await post("/api/settings/fetch", { name: spec.name, path: opt.path }, true);
+    say(st, `${opt.label}: telechajman kòmanse. (Downloading; progress below.)`);
+    watch(spec, opt);
+  } catch (e) { fail(st, e); }
+}
+
+function watch(spec, opt) {
+  const st = $("#set-status");
+  const timer = setInterval(async () => {
+    try {
+      const h = await get("/api/health");
+      const d = h.download || {};
+      if (d.error) { clearInterval(timer); fail(st, new Error(d.error)); return; }
+      if (d.busy) { say(st, `${d.label}: ${Math.round((d.done || 0) * 100)}%`); return; }
+      clearInterval(timer);
+      const j = await get("/api/settings");
+      models = j.models;
+      drawModels();
+      say(st, `${opt.label} desann. Klike sou li pou w sèvi avè l. (Downloaded; click it to use it.)`);
+    } catch (e) { clearInterval(timer); fail(st, e); }
+  }, 1000);
+}
+
+function drawModels() {
+  $("#set-models").replaceChildren(...models.map((spec) => el("section", { class: "set-group" },
+    el("h3", {}, spec.kreyol, " ", el("em", {}, spec.title)),
+    el("ul", { class: "model-list" }, spec.options.map((o) => option(spec, o))))));
+}
+
 
 function row(spec) {
   const [name, about] = LABELS[spec.name] || [spec.name, spec.about];
@@ -70,6 +135,8 @@ export async function init() {
   try {
     const j = await get("/api/settings");
     fields = j.fields;
+    models = j.models || [];
     render(j.values);
+    drawModels();
   } catch (e) { fail($("#set-status"), e); }
 }

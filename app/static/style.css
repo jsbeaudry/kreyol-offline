@@ -349,3 +349,14 @@ footer code { font-size: 12px; }
   .lamp[data-state="starting"] i, .lamp[data-state="busy"] i, .job[data-status="running"] i { animation: none; }
   .btn, .tabs a, .sentence .w, .job .bar b, .job-card .bar b { transition: none; }
 }
+
+/* Reglaj: the model chooser. A model is a file that may or may not be here, so each is a row that
+   says what it is and what choosing it would cost, rather than an option in a select. */
+.model-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.model-pick { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  width: 100%; text-align: left; padding: 7px 10px; border: 1px solid var(--line);
+  border-radius: 7px; background: none; color: inherit; font: inherit; cursor: pointer; }
+.model-pick:hover { border-color: var(--ink); }
+.model-pick.on { border-color: var(--ink); font-weight: 600; }
+.model.bad { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 7px 10px; border: 1px dashed var(--line); border-radius: 7px; opacity: 0.55; }

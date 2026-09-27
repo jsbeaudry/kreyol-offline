@@ -9,6 +9,8 @@ import json
 import os
 import threading
 
+import models
+
 FIELDS = {
     # name: (default, low, high, what it does)
     "vad_threshold": (0.5, 0.1, 0.9, "How sure the detector must be that it hears speech. Higher finds more silence."),
@@ -20,12 +22,17 @@ FIELDS = {
     "paragraph_pause_s": (0.8, 0.0, 4.0, "Silence between paragraphs when the voice reads a document."),
 }
 PATH = None          # set by server.main() to travay/settings.json
+# Which model each kind uses. Numbers are clamped to a range; these are files, so the check is
+# "does it exist, is it the right kind, and is it not one measured to be broken" — see models.py.
+MODEL_FIELDS = tuple(models.MODELS)
 _lock = threading.RLock()        # all() is called while update() holds it
 _values = None
 
 
 def defaults():
-    return {name: spec[0] for name, spec in FIELDS.items()}
+    out = {name: spec[0] for name, spec in FIELDS.items()}
+    out.update({name: models.default(name) for name in MODEL_FIELDS})
+    return out
 
 
 def describe():
@@ -35,9 +42,14 @@ def describe():
 
 
 def clean(changes):
-    """Keep what is known and in range, as the right kind of number."""
+    """Keep what is known: numbers in range, models that exist and are not rejected."""
     out = {}
     for name, value in (changes or {}).items():
+        if name in MODEL_FIELDS:
+            path = value if os.path.isabs(str(value)) else os.path.join(models.ROOT, str(value))
+            if models.usable(name, path):
+                out[name] = path
+            continue
         if name not in FIELDS:
             continue
         default, low, high, _ = FIELDS[name]
@@ -84,3 +96,19 @@ def update(changes):
 
 def reset():
     return update(defaults())
+
+
+def describe_models():
+    """What the page needs to draw the model chooser: every option, and which one is in use."""
+    values = all()
+    return [{"name": name, "title": models.MODELS[name]["title"],
+             "kreyol": models.MODELS[name]["kreyol"], "repo": models.MODELS[name]["repo"],
+             "current": values[name], "reloads": models.RELOADS[name],
+             "options": models.options(name, values[name])}
+            for name in MODEL_FIELDS]
+
+
+def missing():
+    """Chosen models that are not on disk, so the page can say so instead of failing to start."""
+    values = all()
+    return {name: values[name] for name in MODEL_FIELDS if not os.path.exists(values[name])}

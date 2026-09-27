@@ -39,6 +39,34 @@ python push_gguf.py
 
 The run on 2026-09-19 took 1 h 19 min of pod time, about $0.98.
 
+## How small can the talker go?
+
+Asked on 2026-09-23, answered on an M3 Pro rather than a pod: `llama-quantize` from the f16, then
+`compare_quants.py` — the same sentences, voices and metric `eval_tts.py` uses, but judged with the
+ggml m3 through `whisper-server` because that is what is on a laptop. 72 utterances per variant, as
+"Noise" below requires.
+
+| Variant | Size | CER | WER | CER f1 | CER m1 | Verdict |
+|---|---|---|---|---|---|---|
+| Q4_K_M | 1,036 MB | **2.95** | 10.97 | 3.46 | 2.44 | the shipped default |
+| Q3_K_M | 826 MB | 3.51 | 12.90 | 4.43 | 2.59 | works, 20% smaller, slightly worse |
+| Q2_K | 632 MB | — | — | — | — | **unusable** |
+
+**Two bits destroys this model.** Asked for a seven-second sentence, Q2_K produced 41 seconds of audio
+that transcribes as `bot li li li li li li ... gen怎么 li li ... дух solèy telesè`: degenerate looping,
+Chinese and Cyrillic, and no ability to stop. It was not worth the 72-utterance run; one sentence
+settled it. 1.7B parameters is too few to survive two bits. IQ2 with an importance matrix built from
+Kreyòl calibration text might do better, but that is a project, not a quantisation.
+
+**Three bits works but is not obviously worth it.** Q3_K_M saves 210 MB and costs +0.56 CER. Note what
+"Noise" says: at 24 utterances PyTorch alone swung 1.0 CER between seed sets, so at 72 the sampling
+noise is roughly 0.6 — the same size as the difference being measured. Read this as "Q3_K_M is not
+clearly worse and not clearly equal", not as a measured 19% degradation. Deciding properly would take
+several hundred utterances, for 210 MB.
+
+`dikte/settings.py` carries Q2_K in a `REJECTED` table so a copy left in the folder cannot be chosen
+from the menu by mistake.
+
 ## Results
 
 **ASR**, 304 held-out clips, greedy decoding:

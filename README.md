@@ -7,6 +7,8 @@ fine-tuned Whisper model **oswald-large-v3-turbo-m3** (whisper.cpp), and text to
 | Command | What it does |
 |---|---|
 | `./start-page.sh` | Opens the page with all the tools below. Ctrl+C in the terminal stops it. |
+| `./build-dikte-app.sh` | Builds **Dikte.app**: a menu bar app that works in every other app. Hold Right Command and speak, and your Kreyòl lands at the cursor; select any text and hold Left Command, and it is read aloud. One menu item starts and stops it. Needs Microphone and Accessibility permission — see `dikte/README.md`. |
+| `./start-dikte.sh` | The same, from a terminal, without building the app. |
 | `./transcribe.sh recording.m4a` | Speech to text on the command line. Any format ffmpeg reads. |
 | `./speak.sh "Bonjou!" kreyol_m1 out.wav` | Text to speech on the command line. Voices: `kreyol_f1`, `kreyol_f2`, `kreyol_f3`, `kreyol_m1`, `kreyol_v5`. |
 
@@ -183,7 +185,8 @@ programs loaded:
 ## What is in here
 
 - `app/`: the page and its server (above).
-- `start-page.sh`, `transcribe.sh`, `speak.sh`, `setup.sh`, `llama-tts-serve.patch`.
+- `dikte/`: the dictation and reading app — a held key, the mic, and the text pasted at the cursor; another held key and the selected text read aloud.
+- `start-page.sh`, `start-dikte.sh`, `build-dikte-app.sh`, `transcribe.sh`, `speak.sh`, `setup.sh`, `llama-tts-serve.patch`.
 - `convert/`: the RunPod pipeline that converted both models, checked them against PyTorch, and
   published them.
 

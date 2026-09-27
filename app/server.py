@@ -15,6 +15,7 @@ import atexit
 import base64
 import json
 import os
+import threading
 import re
 import shutil
 import signal
@@ -29,7 +30,11 @@ import engine
 import jobs
 import openai_api
 import practice
+import models
 import settings
+
+# What a model download is doing, reported through /api/health so the page needs no new poll.
+downloads = {"busy": False, "name": "", "label": "", "done": 0.0, "error": ""}
 from engine import UserError
 
 APP = os.path.dirname(os.path.abspath(__file__))
@@ -230,7 +235,10 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", r"/voices/([a-z0-9_]+)\.wav"): self.voice_clip,
             ("GET", r"/api/health"): self.health,
             ("GET", r"/api/lessons"): lambda q: practice.LESSONS,
-            ("GET", r"/api/settings"): lambda q: {"values": settings.all(), "fields": settings.describe()},
+            ("GET", r"/api/settings"): lambda q: {"values": settings.all(), "fields": settings.describe(),
+                                                  "models": settings.describe_models()},
+            ("POST", r"/api/settings/model"): lambda q: self.with_json(self.set_model),
+            ("POST", r"/api/settings/fetch"): lambda q: self.with_json(self.fetch_model),
             ("POST", r"/api/settings"): lambda q: {"values": self.with_json(lambda d: settings.update(d.get("values") or d))},
             ("POST", r"/api/settings/reset"): lambda q: {"values": settings.reset()},
             ("GET", r"/api/bible"): self.bible_books,
@@ -273,6 +281,39 @@ class Handler(BaseHTTPRequestHandler):
     def with_json(self, fn):
         return fn(self.json_body())
 
+    def set_model(self, body):
+        """Choose a model, and load it. The reload happens off the request thread so the page answers."""
+        name, path = body.get("name"), body.get("path")
+        if name not in settings.MODEL_FIELDS:
+            raise engine.UserError(f"Pa gen reglaj sa a. (No such setting: {name}.)")
+        values = settings.update({name: path})
+        if values[name] != path:
+            # clean() refused it: missing, the wrong kind, or one measured not to work.
+            why = models.REJECTED.get(os.path.basename(str(path)), "")
+            raise engine.UserError(f"Pa ka sèvi ak modèl sa a. (Cannot use that model{': ' + why if why else ''}.)")
+        threading.Thread(target=engine.reload, args=(models.RELOADS[name],), daemon=True).start()
+        return {"values": values, "models": settings.describe_models(), "reloading": models.RELOADS[name]}
+
+    def fetch_model(self, body):
+        """Download a published model in the background; the page polls /api/state for progress."""
+        name, path = body.get("name"), body.get("path")
+        if name not in settings.MODEL_FIELDS:
+            raise engine.UserError(f"Pa gen reglaj sa a. (No such setting: {name}.)")
+        if downloads.get("busy"):
+            raise engine.UserError("Gen yon telechajman k ap fèt deja. (A download is already running.)")
+
+        def run():
+            downloads.update(busy=True, name=name, label=models.label(str(path)), done=0.0, error="")
+            try:
+                models.fetch(name, path, progress=lambda f: downloads.update(done=round(f, 3)))
+                downloads.update(done=1.0)
+            except Exception as error:
+                downloads.update(error=f"{type(error).__name__}: {error}")
+            finally:
+                downloads["busy"] = False
+        threading.Thread(target=run, daemon=True).start()
+        return {"started": models.label(str(path))}
+
     def page(self, q):
         self.send(200, open(PAGE, "rb").read(), "text/html; charset=utf-8")
 
@@ -292,6 +333,7 @@ class Handler(BaseHTTPRequestHandler):
     def health(self, q):
         running = [j for j in jobs.store.jobs.values() if j["status"] in ("running", "queued")]
         return {"asr": engine.state["asr"], "asr_error": engine.state["asr_error"], "tts": engine.state["tts"],
+                "download": dict(downloads),
                 "tts_mode": engine.state["tts_mode"], "port": PORT,
                 "voices": [{"id": v, "label": label} for v, label in engine.VOICES],
                 "bible": bible.available(),
