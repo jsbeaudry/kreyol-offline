@@ -26,6 +26,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import bible
+import cloud
 import engine
 import jobs
 import openai_api
@@ -236,7 +237,11 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", r"/api/health"): self.health,
             ("GET", r"/api/lessons"): lambda q: practice.LESSONS,
             ("GET", r"/api/settings"): lambda q: {"values": settings.all(), "fields": settings.describe(),
-                                                  "models": settings.describe_models()},
+                                                  "models": settings.describe_models(),
+                                                  **settings.describe_choices()},
+            # Reaches out to the endpoint, so it is its own route rather than part of /api/settings:
+            # loading Reglaj should not wait on a network call, or fail because one did.
+            ("GET", r"/api/settings/cloud"): lambda q: cloud.health(),
             ("POST", r"/api/settings/model"): lambda q: self.with_json(self.set_model),
             ("POST", r"/api/settings/fetch"): lambda q: self.with_json(self.fetch_model),
             ("POST", r"/api/settings"): lambda q: {"values": self.with_json(lambda d: settings.update(d.get("values") or d))},

@@ -28,6 +28,7 @@ import uuid
 import numpy as np
 import soundfile as sf
 
+import cloud
 import settings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +65,10 @@ def require(kind):
     """Refuse politely while a model is loading or if it failed."""
     st = state[kind]
     if st == "ready":
+        return
+    # With the cloud voice chosen there may be no local voice model at all, and that is not an error:
+    # the fallback inside synth_chunk is what covers a cloud failure, not this check.
+    if kind == "tts" and cloud.enabled():
         return
     name = ("Modèl tèks la", "Speech to text") if kind == "asr" else ("Modèl vwa a", "Text to speech")
     if st == "starting":
@@ -399,6 +404,14 @@ def trim_blip(audio, rate=TTS_RATE):
 
 def synth_chunk(text, ref, seed):
     """One piece of text (at most ~220 characters) in the voice of `ref` -> float32 samples at 24 kHz."""
+    if cloud.enabled():
+        try:
+            # The service trims the trailing click itself, with the same function as below, so the
+            # result is finished audio and must not be trimmed twice.
+            return cloud.synth(text, ref, seed)
+        except Exception as error:
+            print(f"cloud voice failed ({error}); reading this part on this machine",
+                  file=sys.stderr, flush=True)
     out = os.path.join(TMP, f"tts-{uuid.uuid4().hex}.wav")
     with tts_lock:
         if voice_model.loaded:
