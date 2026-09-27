@@ -21,6 +21,18 @@ FIELDS = {
     "sentence_pause_s": (0.25, 0.0, 2.0, "Silence between sentences when the voice reads a document."),
     "paragraph_pause_s": (0.8, 0.0, 4.0, "Silence between paragraphs when the voice reads a document."),
 }
+# Settings that are not numbers and not files: a choice from a list, or a URL. Kept separate because
+# clean() checks each kind differently — a number is clamped, a file must exist, and a choice must be
+# one of its options.
+CHOICES = {
+    "tts_engine": (["local", "cloud"], "local",
+                   "Where the voice is generated. `cloud` sends the text to the endpoint below; "
+                   "`local` uses the model on this machine."),
+}
+URLS = {
+    "tts_endpoint": ("", "The HTTPS address of a cloud voice service. It must answer /health and "
+                         "POST /v1/audio/speech with a WAV."),
+}
 PATH = None          # set by server.main() to travay/settings.json
 # Which model each kind uses. Numbers are clamped to a range; these are files, so the check is
 # "does it exist, is it the right kind, and is it not one measured to be broken" — see models.py.
@@ -32,6 +44,8 @@ _values = None
 def defaults():
     out = {name: spec[0] for name, spec in FIELDS.items()}
     out.update({name: models.default(name) for name in MODEL_FIELDS})
+    out.update({name: spec[1] for name, spec in CHOICES.items()})
+    out.update({name: spec[0] for name, spec in URLS.items()})
     return out
 
 
@@ -49,6 +63,17 @@ def clean(changes):
             path = value if os.path.isabs(str(value)) else os.path.join(models.ROOT, str(value))
             if models.usable(name, path):
                 out[name] = path
+            continue
+        if name in CHOICES:
+            if str(value) in CHOICES[name][0]:
+                out[name] = str(value)
+            continue
+        if name in URLS:
+            url = str(value or "").strip().rstrip("/")
+            # Only https, and nothing with a query or credentials in it: this value is used to build a
+            # request that carries the account's token.
+            if not url or (url.startswith("https://") and "?" not in url and "@" not in url):
+                out[name] = url
             continue
         if name not in FIELDS:
             continue
@@ -106,6 +131,16 @@ def describe_models():
              "current": values[name], "reloads": models.RELOADS[name],
              "options": models.options(name, values[name])}
             for name in MODEL_FIELDS]
+
+
+def describe_choices():
+    """What the page needs to draw the engine chooser and the endpoint box."""
+    values = all()
+    return {"choices": [{"name": name, "current": values[name], "options": spec[0],
+                         "default": spec[1], "about": spec[2]}
+                        for name, spec in CHOICES.items()],
+            "urls": [{"name": name, "current": values[name], "about": spec[1]}
+                     for name, spec in URLS.items()]}
 
 
 def missing():

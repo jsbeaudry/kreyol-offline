@@ -83,6 +83,90 @@ function drawModels() {
 }
 
 
+/* ---------- local voice or a cloud one ---------- */
+/* Like the model lists above, this saves on the click rather than with Sove: switching the engine
+   changes what the next reading does, and a half-applied choice would be confusing. The token is not
+   here and never will be — the server holds it and the page only learns whether one exists. */
+let engine = { choices: [], urls: [] };
+
+function engineRow(spec) {
+  const buttons = spec.options.map((name) => {
+    const on = name === spec.current;
+    const label = name === "cloud"
+      ? ["Nan nyaj la", "cloud: the endpoint below reads the text"]
+      : ["Sou machin sa a", "local: the model on this machine"];
+    const b = el("button", { class: on ? "model-pick on" : "model-pick", type: "button" },
+      el("span", {}, on ? `\u2713 ${label[0]}` : label[0]), el("em", { class: "meta" }, label[1]));
+    b.addEventListener("click", () => setEngine(name));
+    return el("li", { class: "model" }, b);
+  });
+  return el("ul", { class: "model-list" }, buttons);
+}
+
+function endpointRow(spec) {
+  const input = el("input", { type: "url", id: "set-tts_endpoint", placeholder: "https://…",
+                              value: spec.current || "", spellcheck: "false" });
+  const test = el("button", { class: "model-pick", type: "button" },
+    el("span", {}, "Teste"), el("em", { class: "meta" }, "check the address answers"));
+  test.addEventListener("click", () => saveEndpoint(input.value, true));
+  input.addEventListener("change", () => saveEndpoint(input.value, false));
+  return el("div", { class: "setting" },
+    el("label", { class: "cap", for: "set-tts_endpoint" }, "Adrès sèvis vwa a ", el("em", {}, "voice service address")),
+    input, test,
+    el("p", { class: "meta", id: "cloud-state" }, spec.about));
+}
+
+async function setEngine(name) {
+  const st = $("#set-status");
+  try {
+    const j = await post("/api/settings", { values: { tts_engine: name } }, true);
+    engine.choices = engine.choices.map((c) => (c.name === "tts_engine" ? { ...c, current: j.values.tts_engine } : c));
+    drawEngine();
+    if (j.values.tts_engine === "cloud") checkCloud();
+    say(st, name === "cloud"
+      ? "Vwa a soti nan nyaj la kounye a. (Readings now go to the endpoint; if it fails, this machine reads instead.)"
+      : "Vwa a soti sou machin sa a. (Readings are generated here.)");
+  } catch (e) { fail(st, e); }
+}
+
+async function saveEndpoint(url, then_test) {
+  const st = $("#set-status");
+  try {
+    const j = await post("/api/settings", { values: { tts_endpoint: url } }, true);
+    engine.urls = engine.urls.map((u) => (u.name === "tts_endpoint" ? { ...u, current: j.values.tts_endpoint } : u));
+    if (!j.values.tts_endpoint && url) {
+      say(st, "Adrès la pa sove: se yon adrès https san kesyon ladan l li dwe ye. (Not saved: an https address with no query string.)");
+      return;
+    }
+    say(st, "Adrès sove. (Address saved.)");
+    if (then_test || url) checkCloud();
+  } catch (e) { fail(st, e); }
+}
+
+async function checkCloud() {
+  const line = $("#cloud-state");
+  if (!line) return;
+  line.textContent = "N ap tcheke… (checking…)";
+  try {
+    const j = await get("/api/settings/cloud");
+    line.textContent = j.ok
+      ? `Li reponn. Vwa: ${(j.voices || []).join(", ") || "pa gen youn ki nonmen"}. (Reachable${(j.voices || []).length ? "" : "; it reported no voices"}.)`
+      : `Li pa mache: ${j.why}.`;
+  } catch (e) { line.textContent = `Li pa mache: ${e.message || e}.`; }
+}
+
+function drawEngine() {
+  const host = $("#set-engine");
+  if (!host) return;
+  const choice = engine.choices.find((c) => c.name === "tts_engine");
+  const url = engine.urls.find((u) => u.name === "tts_endpoint");
+  host.replaceChildren(el("section", { class: "set-group" },
+    el("h3", {}, "Ki kote vwa a fèt ", el("em", {}, "where the voice is generated")),
+    choice ? engineRow(choice) : "",
+    url ? endpointRow(url) : ""));
+}
+
+
 function row(spec) {
   const [name, about] = LABELS[spec.name] || [spec.name, spec.about];
   const input = el("input", { type: "number", id: `set-${spec.name}`, min: spec.min, max: spec.max,
@@ -136,7 +220,10 @@ export async function init() {
     const j = await get("/api/settings");
     fields = j.fields;
     models = j.models || [];
+    engine = { choices: j.choices || [], urls: j.urls || [] };
     render(j.values);
     drawModels();
+    drawEngine();
+    if (j.values.tts_engine === "cloud") checkCloud();
   } catch (e) { fail($("#set-status"), e); }
 }
