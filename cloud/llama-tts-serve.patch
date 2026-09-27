@@ -1,0 +1,330 @@
+diff --git a/tools/tts/tts.cpp b/tools/tts/tts.cpp
+index 6fd1936..9835302 100644
+--- a/tools/tts/tts.cpp
++++ b/tools/tts/tts.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include <cstdio>
+ #include <cstring>
++#include <iostream>
+ #include <string>
+ 
+ /**
+@@ -35,92 +36,60 @@ struct tts_timings {
+ static void print_usage(int, char ** argv) {
+     LOG("\nexample usage:\n");
+     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
+-    LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
++    LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav", argv[0]);
++    LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p - < jobs.tsv\n", argv[0]);
+     LOG("\nnote: --tts-lang and --tts-speaker-file may not be supported in all models");
+     LOG("\n      use -n to limit the output length");
++    LOG("\n      -p - keeps the model loaded and reads one job per stdin line:");
++    LOG("\n        out.wav<TAB>speaker.wav<TAB>seed<TAB>text   (speaker may be empty)");
++    LOG("\n      each job is answered on stdout by a line starting with \"@@tts\"");
+     LOG("\n      see tts/README.md for per-model usage notes");
+     LOG("\n\n");
+ }
+ 
+-int main(int argc, char ** argv) {
+-    common_params params;
+-
+-    common_init();
+-
+-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
+-        return 1;
+-    }
+-
+-    mtmd_helper_log_set(common_log_default_callback, nullptr);
+-
+-    if (params.prompt.empty()) {
+-        LOG_ERR("no prompt provided, use -p \"text\"\n");
+-        return 1;
+-    }
+-    if (params.mmproj.path.empty()) {
+-        LOG_ERR("no mmproj provided, use --mmproj\n");
+-        return 1;
+-    }
+-
+-    // important: keep this file as generic as possible
+-    //            model-specific logic should be in mtmd-helper-gen or mtmd API
+-
+-    // always enable embd, so that we can pass hidden states to the audio generation helper
+-    params.embedding = true;
+-
+-    llama_backend_init();
+-    llama_numa_init(params.numa);
+-
+-    //
+-    // load backbone model and mmproj
+-    //
+-
+-    auto llama_init = common_init_from_params(params);
+-    llama_model    * model = llama_init->model();
+-    llama_context  * lctx  = llama_init->context();
+-    common_sampler * smpl  = llama_init->sampler(0);
+-    if (!model || !lctx) {
+-        LOG_ERR("failed to init model/context\n");
+-        return 1;
+-    }
+-
+-    mtmd_context_params mtmd_params = mtmd_context_params_default();
+-    mtmd_params.use_gpu = params.mmproj_use_gpu;
+-    mtmd_params.device  = params.mmproj_device;
+-    mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
+-    if (!mctx) {
+-        LOG_ERR("failed to load mmproj %s\n", params.mmproj.path.c_str());
+-        return 1;
+-    }
+-    if (mtmd_gen_audio_get_info(mctx.get()).type == MTMD_GEN_AUDIO_TYPE_NONE) {
+-        LOG_ERR("mmproj does not support audio generation\n");
+-        return 1;
+-    }
++struct tts_job {
++    std::string text;
++    std::string speaker;
++    std::string out;
++    uint32_t    seed;
++};
+ 
++// One utterance, start to finish. Returns an empty string on success, otherwise what went wrong.
++static std::string synthesize(const common_params & params, llama_model * model, llama_context * lctx,
++                              mtmd_context * mctx, mtmd_helper::gen_audio & gen, const tts_job & job,
++                              double & audio_s, double & t_total_s) {
+     //
+     // stage 0: process speaker reference file, if any
+     //
+ 
+     mtmd::bitmap_ptr speaker_bitmap;
+-    if (!params.tts_speaker_file.empty()) {
+-        auto wrapper = mtmd_helper_bitmap_init_from_file(mctx.get(), params.tts_speaker_file.c_str(), false, mtmd_helper_init_opt_default());
++    if (!job.speaker.empty()) {
++        auto wrapper = mtmd_helper_bitmap_init_from_file(mctx, job.speaker.c_str(), false, mtmd_helper_init_opt_default());
+         if (!wrapper.bitmap) {
+-            LOG_ERR("failed to load speaker file %s\n", params.tts_speaker_file.c_str());
+-            return 1;
++            return "failed to load speaker file " + job.speaker;
+         }
+         speaker_bitmap.reset(wrapper.bitmap);
+     }
+ 
+-    mtmd_helper::gen_audio gen(lctx, mctx.get());
++    // a job must not see the one before it: set_input() resets the helper's own state but not the
++    // KV cache, and a sampler keeps its seed and repetition-penalty history, so both start fresh
++    llama_memory_clear(llama_get_memory(lctx), true);
++    common_params_sampling sparams = params.sampling;
++    sparams.seed = job.seed;
++    common_sampler_ptr smpl(common_sampler_init(model, sparams));
++    if (!smpl) {
++        return "failed to init sampler";
++    }
++
+     mtmd_helper_gen_audio_inp inp{};
+     inp.seq_id      = 0;
+-    inp.prompt      = params.prompt.c_str();
+-    inp.prompt_len  = params.prompt.size();
++    inp.prompt      = job.text.c_str();
++    inp.prompt_len  = job.text.size();
+     inp.speaker_ref = speaker_bitmap.get();
+     inp.lang        = params.tts_lang.c_str();
+     inp.top_k       = params.sampling.top_k;
+     inp.top_p       = params.sampling.top_p;
+-    inp.seed        = params.sampling.seed;
++    inp.seed        = job.seed;
+     inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+ 
+     //
+@@ -128,8 +97,7 @@ int main(int argc, char ** argv) {
+     //
+ 
+     if (gen.set_input(&inp) != 0) {
+-        LOG_ERR("set_input failed\n");
+-        return 1;
++        return "set_input failed";
+     }
+ 
+     const int64_t t_prompt_start_us = ggml_time_us();
+@@ -137,8 +105,7 @@ int main(int argc, char ** argv) {
+     for (;;) {
+         int32_t ret = gen.step_prompt(params.n_batch);
+         if (ret < 0) {
+-            LOG_ERR("prompt processing failed\n");
+-            return 1;
++            return "prompt processing failed";
+         }
+         if (ret == 0) {
+             break;
+@@ -147,8 +114,8 @@ int main(int argc, char ** argv) {
+ 
+     // note: some pipelines ignore this token and use the hidden state instead
+     auto sample_semantic_code = [&]() -> llama_token {
+-        llama_token t = common_sampler_sample(smpl, lctx, -1);
+-        common_sampler_accept(smpl, t, true);
++        llama_token t = common_sampler_sample(smpl.get(), lctx, -1);
++        common_sampler_accept(smpl.get(), t, true);
+         return t;
+     };
+ 
+@@ -167,8 +134,7 @@ int main(int argc, char ** argv) {
+         // stage 2+3: semantic --> acoustic details --> audio waveform
+         //            step_gen() runs both stages and returns new h_state for next step
+         if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
+-            LOG_ERR("step_gen failed at frame %d\n", n_frames);
+-            return 1;
++            return "step_gen failed at frame " + std::to_string(n_frames);
+         }
+         if (!h_next) {
+             break; // stopped without generating a frame
+@@ -187,27 +153,144 @@ int main(int argc, char ** argv) {
+     int64_t      n_samples   = 0;
+     const int64_t t_wav_start_us = ggml_time_us();
+     if (gen.get_output(&sample_rate, &data, &data_len, &n_samples) != 0) {
+-        LOG_ERR("get_output failed\n");
+-        return 1;
++        return "get_output failed";
+     }
+     const double t_wav_s = (ggml_time_us() - t_wav_start_us) / 1e6;
+ 
+     LOG_INF("generated %d frames, %zu bytes of WAV audio (%d Hz)\n", n_frames, data_len, sample_rate);
+ 
+     const double t_prompt_s = (t_gen_start_us - t_prompt_start_us) / 1e6;
+-    const double t_total_s  = t_prompt_s + t_gen_s + t_wav_s;
+-    const double audio_s    = sample_rate > 0 ? (double) n_samples / sample_rate : 0.0;
++    t_total_s = t_prompt_s + t_gen_s + t_wav_s;
++    audio_s   = sample_rate > 0 ? (double) n_samples / sample_rate : 0.0;
+     LOG_INF("timings: prompt eval %.2fs + generation %.2fs + vocoder %.2fs = total %.2fs\n",
+             t_prompt_s, t_gen_s, t_wav_s, t_total_s);
+     LOG_INF("         output audio = %.2fs (audio time = %.2fx process time)\n", audio_s, t_total_s > 0 ? audio_s / t_total_s : 0.0);
+-    FILE * f = fopen(params.out_file.c_str(), "wb");
++    FILE * f = fopen(job.out.c_str(), "wb");
+     if (!f) {
+-        LOG_ERR("failed to open %s\n", params.out_file.c_str());
+-        return 1;
++        return "failed to open " + job.out;
+     }
+     fwrite(data, 1, data_len, f);
+     fclose(f);
+-    LOG_INF("wrote %s\n", params.out_file.c_str());
++    LOG_INF("wrote %s\n", job.out.c_str());
++    return "";
++}
++
++int main(int argc, char ** argv) {
++    common_params params;
++
++    common_init();
++
++    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
++        return 1;
++    }
++
++    mtmd_helper_log_set(common_log_default_callback, nullptr);
++
++    if (params.prompt.empty()) {
++        LOG_ERR("no prompt provided, use -p \"text\" (or -p - to read jobs from stdin)\n");
++        return 1;
++    }
++    if (params.mmproj.path.empty()) {
++        LOG_ERR("no mmproj provided, use --mmproj\n");
++        return 1;
++    }
++
++    // important: keep this file as generic as possible
++    //            model-specific logic should be in mtmd-helper-gen or mtmd API
++
++    // always enable embd, so that we can pass hidden states to the audio generation helper
++    params.embedding = true;
++
++    llama_backend_init();
++    llama_numa_init(params.numa);
++
++    //
++    // load backbone model and mmproj
++    //
++
++    auto llama_init = common_init_from_params(params);
++    llama_model    * model = llama_init->model();
++    llama_context  * lctx  = llama_init->context();
++    if (!model || !lctx) {
++        LOG_ERR("failed to init model/context\n");
++        return 1;
++    }
++
++    mtmd_context_params mtmd_params = mtmd_context_params_default();
++    mtmd_params.use_gpu = params.mmproj_use_gpu;
++    mtmd_params.device  = params.mmproj_device;
++    mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
++    if (!mctx) {
++        LOG_ERR("failed to load mmproj %s\n", params.mmproj.path.c_str());
++        return 1;
++    }
++    if (mtmd_gen_audio_get_info(mctx.get()).type == MTMD_GEN_AUDIO_TYPE_NONE) {
++        LOG_ERR("mmproj does not support audio generation\n");
++        return 1;
++    }
++
++    // one helper for every job: it builds its token-embedding table once, on the first set_input()
++    mtmd_helper::gen_audio gen(lctx, mctx.get());
++    double audio_s = 0.0, t_total_s = 0.0;
++
++    if (params.prompt != "-") {
++        const tts_job job{params.prompt, params.tts_speaker_file, params.out_file, params.sampling.seed};
++        const std::string err = synthesize(params, model, lctx, mctx.get(), gen, job, audio_s, t_total_s);
++        if (!err.empty()) {
++            LOG_ERR("%s\n", err.c_str());
++            return 1;
++        }
++        llama_backend_free();
++        return 0;
++    }
++
++    //
++    // -p -: stay loaded, one job per stdin line, one "@@tts" answer per job on stdout
++    //
++
++    printf("@@tts\tready\n");
++    fflush(stdout);
++    std::string line;
++    while (std::getline(std::cin, line)) {
++        if (!line.empty() && line.back() == '\r') {
++            line.pop_back();
++        }
++        if (line.empty()) {
++            continue;
++        }
++        std::string field[4];
++        size_t start = 0;
++        bool ok = true;
++        for (int i = 0; i < 3 && ok; i++) {
++            const size_t tab = line.find('\t', start);
++            ok = tab != std::string::npos;
++            if (ok) {
++                field[i] = line.substr(start, tab - start);
++                start = tab + 1;
++            }
++        }
++        if (!ok) {
++            printf("@@tts\terr\texpected out.wav<TAB>speaker.wav<TAB>seed<TAB>text\n");
++            fflush(stdout);
++            continue;
++        }
++        field[3] = line.substr(start);
++
++        uint32_t seed = params.sampling.seed;
++        try {
++            seed = (uint32_t) std::stoul(field[2]);
++        } catch (...) {
++            // keep the command-line seed
++        }
++        const tts_job job{field[3], field[1], field[0], seed};
++        const std::string err = synthesize(params, model, lctx, mctx.get(), gen, job, audio_s, t_total_s);
++        if (err.empty()) {
++            printf("@@tts\tok\t%s\t%.3f\t%.3f\n", job.out.c_str(), audio_s, t_total_s);
++        } else {
++            printf("@@tts\terr\t%s\n", err.c_str());
++        }
++        fflush(stdout);
++    }
+ 
+     llama_backend_free();
+     return 0;

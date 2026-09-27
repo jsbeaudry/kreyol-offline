@@ -1,0 +1,35 @@
+{
+  "text": "Bonjou, mwen se yon vwa kreyòl. Mwen ka li nenpòt tèks ou ban mwen, byen klè e san prese.",
+  "voices": {
+    "kreyol_f1": {
+      "cer": 2.35,
+      "seconds": 9.0,
+      "take": "kreyol_f1_0.wav",
+      "asr": "bonjou mwen se yon vwa kreyòl mwen kale nenpòt tèks ou ban mwen byen klè e san prese"
+    },
+    "kreyol_f2": {
+      "cer": 0.0,
+      "seconds": 8.8,
+      "take": "kreyol_f2_0.wav",
+      "asr": "bonjou mwen se yon vwa kreyòl mwen ka li nenpòt tèks ou ban mwen byen klè e san prese"
+    },
+    "kreyol_f3": {
+      "cer": 2.35,
+      "seconds": 7.8,
+      "take": "kreyol_f3_0.wav",
+      "asr": "bonjou mwen se yon vwa kreyòl mwen ka li nenpòt tèk sou ban mwen byen klè e san prese"
+    },
+    "kreyol_m1": {
+      "cer": 0.0,
+      "seconds": 9.0,
+      "take": "kreyol_m1_0.wav",
+      "asr": "bonjou mwen se yon vwa kreyòl mwen ka li nenpòt tèks ou ban mwen byen klè e san prese"
+    },
+    "kreyol_v5": {
+      "cer": 3.53,
+      "seconds": 8.3,
+      "take": "kreyol_v5_2.wav",
+      "asr": "bonjou mwen se yon vwa kreyòl mwen kalinen pòt tèks ou ban mwen byen klè e san prese"
+    }
+  }
+}
