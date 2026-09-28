@@ -11,3 +11,8 @@ travay/
 
 # The Bible text is not shipped: app/make_bible.py builds it from your own files.
 app/data/
+
+# Credentials. LiveKit Cloud keys and any token live here and must never be committed.
+.env
+.env.local
+*.env.local

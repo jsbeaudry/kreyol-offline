@@ -20,6 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git cmake build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The driver library is not in a devel image — only a stub, which is all a link needs. Without this the
+# build spends forty minutes compiling and then dies with "undefined reference to cuGetErrorString".
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+
 WORKDIR /src
 RUN git clone https://github.com/ggml-org/llama.cpp.git . \
     && git checkout ${LLAMA_COMMIT}
@@ -37,6 +42,8 @@ RUN cmake -B build \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=OFF \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
     && cmake --build build --target llama-tts -j"$(nproc)"
 
 # Fail the build rather than the first request if the patch silently did not take effect.
