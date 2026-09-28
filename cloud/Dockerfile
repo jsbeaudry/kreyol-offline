@@ -22,8 +22,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # The driver library is not in a devel image — only a stub, which is all a link needs. Without this the
 # build spends forty minutes compiling and then dies with "undefined reference to cuGetErrorString".
+# A CUDA devel image ships a stub libcuda, not the driver, and nothing links against it by default.
+# The first attempt at this put the stubs directory on the search path and stopped there — which tells
+# the linker where to look without telling it what to look for, so the build still failed after fifty
+# minutes with "undefined reference to cuMemMap". The library has to be named as well as found: hence
+# the -lcuda below, and the stub placed where ldconfig can see it.
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so \
+    && ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+    && echo /usr/local/cuda/lib64/stubs > /etc/ld.so.conf.d/cuda-stubs.conf \
+    && ldconfig
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}
-RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+
+# Prove the driver API links before spending fifty minutes finding out it does not. These are the exact
+# symbols the real build failed on twice; if this cannot link them, neither can ggml-cuda, and the
+# build should say so in seconds rather than after the whole compile.
+RUN printf '%s\n' '#include <cuda.h>' 'int main(){CUdevice d;int v;' \
+      'cuDeviceGetAttribute(&v,CU_DEVICE_ATTRIBUTE_CLOCK_RATE,d);' \
+      'cuMemGetAllocationGranularity(0,0,CU_MEM_ALLOC_GRANULARITY_MINIMUM);' \
+      'const char*s;cuGetErrorString(CUDA_SUCCESS,&s);return 0;}' > /tmp/link-check.c \
+    && gcc /tmp/link-check.c -I/usr/local/cuda/include -L/usr/local/cuda/lib64/stubs -lcuda \
+         -o /tmp/link-check \
+    && echo "the CUDA driver API links" \
+    && rm -f /tmp/link-check /tmp/link-check.c
 
 WORKDIR /src
 RUN git clone https://github.com/ggml-org/llama.cpp.git . \
@@ -42,8 +62,8 @@ RUN cmake -B build \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=OFF \
-        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
-        -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
     && cmake --build build --target llama-tts -j"$(nproc)"
 
 # Fail the build rather than the first request if the patch silently did not take effect.
