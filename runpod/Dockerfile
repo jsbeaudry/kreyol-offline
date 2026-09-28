@@ -65,6 +65,14 @@ RUN git clone https://github.com/ggml-org/whisper.cpp.git . \
         -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
     && cmake --build build --target whisper-server -j"$(nproc)"
 
+# Gather what the runtime needs into one tree. `find` rather than a glob because the libraries live in
+# several directories and carry versioned names; `cp -a` because the unversioned name is a symlink to
+# the versioned file and copying it as a plain file loses the thing the binary looks for.
+RUN mkdir -p /out/bin /out/lib \
+    && cp -a /llama/build/bin/llama-tts /whisper/build/bin/whisper-server /out/bin/ \
+    && find /llama/build /whisper/build -name "*.so*" -exec cp -a {} /out/lib/ \; \
+    && ls /out/lib
+
 
 FROM nvidia/cuda:${CUDA}-runtime-ubuntu22.04
 
@@ -72,11 +80,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir runpod numpy
 
-COPY --from=build /llama/build/bin/llama-tts /opt/llama/bin/
-COPY --from=build /llama/build/bin/*.so /opt/llama/lib/
-COPY --from=build /whisper/build/bin/whisper-server /opt/whisper/bin/
-COPY --from=build /whisper/build/src/*.so* /whisper/build/ggml/src/*.so* /opt/whisper/lib/
-ENV LD_LIBRARY_PATH=/opt/llama/lib:/opt/whisper/lib
+COPY --from=build /out/ /opt/speech/
+ENV LD_LIBRARY_PATH=/opt/speech/lib
+ENV LLAMA_TTS=/opt/speech/bin/llama-tts WHISPER=/opt/speech/bin/whisper-server
+
+# The first version of this image copied `*.so` and shipped binaries that could not start: the
+# libraries carry versioned sonames, so `libllama.so` was present while `libllama.so.0` — the name the
+# binary actually links against — was not, and whisper's libraries were not copied at all. The
+# container exited before Python wrote a line, which is the least informative way to fail.
+# So: prove both binaries can resolve every library, here, where it costs seconds.
+RUN for exe in /opt/speech/bin/llama-tts /opt/speech/bin/whisper-server; do \
+      if ldd "$exe" | grep -q "not found"; then \
+        echo "$exe cannot resolve:"; ldd "$exe" | grep "not found"; exit 1; \
+      fi; \
+    done && echo "both binaries resolve every library they need"
 
 COPY voices/ /opt/voices/
 COPY kreyol_text.py handler.py /app/
