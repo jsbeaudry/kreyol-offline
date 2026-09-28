@@ -40,11 +40,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kreyol_text import normalize                                      # noqa: E402
 
 
-def find(pattern, suffix):
+def find(pattern, suffix, exclude=None):
+    """The first model matching, skipping names that contain `exclude`.
+
+    The exclusion is the whole point: "mmproj-qwen3-tts-1.7b-kreyol-Q8_0.gguf" contains "qwen3-tts" and
+    sorts before the backbone, so searching for the backbone by name found the projector and llama-tts
+    answered "CLIP cannot be used as main model". Same trap the other image documents and avoids.
+    """
     for name in sorted(os.listdir(MODELS)):
+        if exclude and exclude in name:
+            continue
         if pattern in name and name.endswith(suffix):
             return os.path.join(MODELS, name)
-    raise SystemExit(f"no {pattern}*{suffix} in {MODELS}")
+    raise SystemExit(f"no {pattern}*{suffix} in {MODELS}"
+                     + (f" (ignoring {exclude})" if exclude else ""))
 
 
 class Voice:
@@ -54,14 +63,19 @@ class Voice:
         self.proc, self.replies, self.lock = None, queue.Queue(), threading.Lock()
 
     def start(self):
-        model = os.environ.get("TTS_MODEL") or find("qwen3-tts", ".gguf")
+        model = os.environ.get("TTS_MODEL") or find("qwen3-tts", ".gguf", exclude="mmproj")
         mmproj = os.environ.get("TTS_MMPROJ") or find("mmproj", ".gguf")
+        print(f"starting: llama-tts -m {model} --mmproj {mmproj}", flush=True)
+        # Its output goes to a file as well, so a failure can be quoted rather than guessed at. The
+        # message below used to blame the patch for every failure, including this one, where the patch
+        # was present and the model was wrong.
+        log = open(TTS_LOG, "w")
         self.proc = subprocess.Popen(
             [LLAMA_TTS, "-m", model, "--mmproj", mmproj, *SAMPLING, "-p", "-", "-o", os.devnull],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True, bufsize=1)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
         threading.Thread(target=self._pump, daemon=True).start()
         if self.replies.get(timeout=600) != "@@tts\tready":
-            raise SystemExit("llama-tts has no job loop; is the serve patch in this build?")
+            raise SystemExit(f"llama-tts never said ready: {tail(TTS_LOG)}")
         self.say("Bonjou.", os.path.join(VOICES, "kreyol_f1.wav"), "/tmp/warm.wav", 0)
 
     def _pump(self):
@@ -83,15 +97,20 @@ class Voice:
 
 
 WHISPER_LOG = "/tmp/whisper-server.log"
+TTS_LOG = "/tmp/llama-tts.log"
 
 
-def whisper_tail(lines=14):
-    """The end of whisper-server's own output, for an error worth reading."""
+def tail(path, lines=14):
+    """The end of an engine's own output, for an error worth reading."""
     try:
-        with open(WHISPER_LOG, encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             return " | ".join(line.strip() for line in f.read().splitlines()[-lines:] if line.strip())
     except OSError:
         return "(no output)"
+
+
+def whisper_tail(lines=14):
+    return tail(WHISPER_LOG, lines)
 
 
 def start_whisper():
