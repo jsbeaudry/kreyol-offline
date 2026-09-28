@@ -76,7 +76,9 @@ RUN mkdir -p /out/bin /out/lib \
 
 FROM nvidia/cuda:${CUDA}-runtime-ubuntu22.04
 
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip \
+# libgomp1 is the OpenMP runtime both binaries link against; the devel image has it, the runtime image
+# does not, and without it neither can start.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir runpod numpy
 
@@ -89,11 +91,15 @@ ENV LLAMA_TTS=/opt/speech/bin/llama-tts WHISPER=/opt/speech/bin/whisper-server
 # binary actually links against — was not, and whisper's libraries were not copied at all. The
 # container exited before Python wrote a line, which is the least informative way to fail.
 # So: prove both binaries can resolve every library, here, where it costs seconds.
+# libcuda.so.1 is excluded on purpose: it is the driver, it is never in an image, and the NVIDIA
+# container runtime injects it from the host at start. Requiring it here would fail every build for a
+# library that is correctly absent. Everything else missing is a real fault and stops the build.
 RUN for exe in /opt/speech/bin/llama-tts /opt/speech/bin/whisper-server; do \
-      if ldd "$exe" | grep -q "not found"; then \
-        echo "$exe cannot resolve:"; ldd "$exe" | grep "not found"; exit 1; \
+      missing="$(ldd "$exe" | grep 'not found' | grep -v 'libcuda\.so' || true)"; \
+      if [ -n "$missing" ]; then \
+        echo "$exe cannot resolve:"; echo "$missing"; exit 1; \
       fi; \
-    done && echo "both binaries resolve every library they need"
+    done && echo "both binaries resolve every library they need except the host-injected driver"
 
 COPY voices/ /opt/voices/
 COPY kreyol_text.py handler.py /app/
