@@ -11,6 +11,10 @@ ARG CUDA=12.4.1
 FROM nvidia/cuda:${CUDA}-devel-ubuntu22.04 AS build
 
 ARG LLAMA_COMMIT=1af554f8fc78ba029665a47b839484d9763e2a75
+# GGML_NATIVE=OFF below is not a tuning choice. Built with the default, ggml compiles for whatever the
+# build machine happens to support, and a GitHub runner supports instructions a serverless host does
+# not: whisper-server read the model header and then died with signal 4, SIGILL, an illegal
+# instruction. The binary has to run on a CPU it was not built on, so it cannot be built for this one.
 ARG CUDA_ARCHS="75;89"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,7 +52,7 @@ RUN git clone https://github.com/ggml-org/llama.cpp.git . && git checkout ${LLAM
 COPY llama-tts-serve.patch /llama/serve.patch
 RUN git apply --verbose /llama/serve.patch
 RUN cmake -B build \
-        -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DGGML_NATIVE=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
         -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF \
         -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
@@ -59,7 +63,7 @@ RUN cmake -B build \
 WORKDIR /whisper
 RUN git clone https://github.com/ggml-org/whisper.cpp.git . \
     && cmake -B build \
-        -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DGGML_NATIVE=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" -DWHISPER_BUILD_TESTS=OFF \
         -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
         -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
