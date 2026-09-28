@@ -1,0 +1,67 @@
+# Build the RunPod speech worker and push it to GHCR.
+#
+# Needs an HF_TOKEN repository secret: the two models are private, and they are baked into the image so
+# a cold worker does not have to download two gigabytes before it can say anything. The token is used
+# during the build and is not stored in the image.
+name: runpod-speech image
+
+on:
+  workflow_dispatch:
+    inputs:
+      cuda_archs:
+        description: 'CUDA architectures (75=T4, 80=A100, 86=A10G, 89=L4). Fewer builds faster.'
+        default: '75;89'
+  push:
+    branches: [main]
+    paths: ['runpod/**', '.github/workflows/runpod-speech.yml']
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/kreyol-speech
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse early if the token is missing
+        run: |
+          if [ -z "${{ secrets.HF_TOKEN }}" ]; then
+            echo "::error::Add an HF_TOKEN repository secret — the models are private and this build downloads them."
+            exit 1
+          fi
+
+      # Two CUDA build stages plus the models do not fit beside the runner's preinstalled toolchains.
+      - name: Make room on the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./runpod
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            CUDA_ARCHS=${{ inputs.cuda_archs || '75;89' }}
+          secrets: |
+            HF_TOKEN=${{ secrets.HF_TOKEN }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
