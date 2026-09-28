@@ -161,10 +161,40 @@ def wav_of(frames, rate):
 
 
 VOICE = Voice()
+# Loading is done on a thread so the SDK can register immediately. RunPod expects
+# runpod.serverless.start() promptly and kills a worker that has not registered — and because it only
+# streams a worker's logs once it has registered, a worker that dies loading prints nothing at all,
+# which is how this failed three times with no output to read. Register first, load behind it, and make
+# the first job wait.
+_ready = threading.Event()
+_failed = {"why": None}
+
+
+def load():
+    try:
+        print("loading whisper.cpp and llama-tts…", flush=True)
+        started = time.time()
+        start_whisper()
+        VOICE.start()
+        print(f"both engines warm in {time.time() - started:.1f}s", flush=True)
+        _ready.set()
+    except BaseException as error:              # a load failure must reach a job, not vanish
+        _failed["why"] = f"{type(error).__name__}: {error}"
+        print(f"loading failed: {_failed['why']}", flush=True)
+        _ready.set()
+
+
+def wait_for_engines(timeout=600):
+    if not _ready.wait(timeout):
+        return "the speech models are still loading"
+    return _failed["why"]
 
 
 def handler(job):
     started = time.time()
+    problem = wait_for_engines()
+    if problem:
+        return {"error": problem}
     data = job.get("input") or {}
     action = (data.get("action") or "tts").lower()
     try:
@@ -200,8 +230,6 @@ def handler(job):
 
 
 if __name__ == "__main__":
-    print("loading whisper.cpp and llama-tts…", flush=True)
-    start_whisper()
-    VOICE.start()
-    print("both engines warm; waiting for jobs", flush=True)
+    threading.Thread(target=load, daemon=True).start()
+    print("registering with runpod while the models load", flush=True)
     runpod.serverless.start({"handler": handler})
