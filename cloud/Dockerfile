@@ -13,8 +13,10 @@ FROM nvidia/cuda:${CUDA}-devel-ubuntu22.04 AS build
 
 # The commit ~/kreyol-offline/llama.cpp is checked out at.
 ARG LLAMA_COMMIT=1af554f8fc78ba029665a47b839484d9763e2a75
-# T4, A100, A10G and L4 — the GPUs a Hugging Face endpoint is likely to give this.
-ARG CUDA_ARCHS="75;80;86;89"
+# 86 is Ampere (A5000, RTX 3090, A4000, A40) and 89 is Ada (L4, RTX 2000 Ada, RTX 4090) — between
+# them every GPU in RunPod's cheap serverless tier. An earlier default of "75;89" was wrong: 75 is the
+# T4, which RunPod does not offer for serverless at all, and it left out Ampere entirely.
+ARG CUDA_ARCHS="86;89"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git cmake build-essential ca-certificates \
@@ -34,10 +36,22 @@ RUN git clone https://github.com/ggml-org/llama.cpp.git . \
 COPY llama-tts-serve.patch /src/llama-tts-serve.patch
 RUN git apply --verbose /src/llama-tts-serve.patch
 
+# libggml-cuda calls the CUDA *driver* API (cuMemMap, cuDeviceGetAttribute), which lives in
+# libcuda.so — a file that exists only on a machine with an NVIDIA driver. A build runner has no GPU,
+# so the toolkit's stub has to be on the link path or the link fails with undefined `cu*` symbols.
+# The stub is never copied into the runtime image: there the real driver arrives from the host.
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}
+
+# GGML_NATIVE=OFF because the runner's CPU is not the deploy machine's. Left on, ggml compiles with
+# -march=native for whatever the runner happens to be, and the image can then hit an illegal
+# instruction on a different host.
 RUN cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_CUDA=ON \
+        -DGGML_NATIVE=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
         -DLLAMA_CURL=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -58,8 +72,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/local/bin/python
 
-COPY --from=build /src/build/bin/llama-tts /opt/llama/bin/llama-tts
-COPY --from=build /src/build/bin/*.so /opt/llama/lib/
+# The whole directory, symlinks and all: llama.cpp ships libllama.so, libllama.so.0 and
+# libllama.so.0.24.0 as links to one file, and the binary looks the library up by its SONAME.
+COPY --from=build /src/build/bin/ /opt/llama/bin/
+RUN mkdir -p /opt/llama/lib && mv /opt/llama/bin/*.so* /opt/llama/lib/ \
+    && find /opt/llama/bin -type f ! -name llama-tts -delete
 ENV LD_LIBRARY_PATH=/opt/llama/lib
 
 COPY voices/ /opt/voices/
