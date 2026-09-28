@@ -82,21 +82,39 @@ class Voice:
             raise RuntimeError((reply or "no reply").split("\t")[-1])
 
 
+WHISPER_LOG = "/tmp/whisper-server.log"
+
+
+def whisper_tail(lines=14):
+    """The end of whisper-server's own output, for an error worth reading."""
+    try:
+        with open(WHISPER_LOG, encoding="utf-8", errors="replace") as f:
+            return " | ".join(line.strip() for line in f.read().splitlines()[-lines:] if line.strip())
+    except OSError:
+        return "(no output)"
+
+
 def start_whisper():
     model = os.environ.get("STT_MODEL") or find("ggml-oswald", ".bin")
-    proc = subprocess.Popen(
-        [WHISPER, "-m", model, "-l", "ht", "-bs", "1", "-bo", "1", "-t", str(os.cpu_count() or 4),
-         "--host", "127.0.0.1", "--port", str(ASR_PORT)],
-        stdout=sys.stderr, stderr=subprocess.STDOUT)
+    # No -t: the local kit runs whisper-server without one and works, while a serverless host reports
+    # a hundred-odd vCPUs and "-t 128" is not a thing anyone tested. Match what is known to run.
+    args = [WHISPER, "-m", model, "-l", "ht", "-bs", "1", "-bo", "1",
+            "--host", "127.0.0.1", "--port", str(ASR_PORT)]
+    print("starting: " + " ".join(args), flush=True)
+    # Its output goes to a file as well as the console, so a failure can be quoted back in the error
+    # rather than leaving "stopped while starting" as the whole story — which cost two rounds of this.
+    log = open(WHISPER_LOG, "w")
+    proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(180):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{ASR_PORT}/", timeout=2)
+            print("whisper-server is answering", flush=True)
             return proc
         except Exception:
             if proc.poll() is not None:
-                raise SystemExit("whisper-server stopped while starting")
+                raise SystemExit(f"whisper-server exited with {proc.returncode}: {whisper_tail()}")
             time.sleep(1)
-    raise SystemExit("whisper-server did not start")
+    raise SystemExit(f"whisper-server did not answer in 180s: {whisper_tail()}")
 
 
 def transcribe(wav_bytes):
