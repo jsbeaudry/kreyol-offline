@@ -186,6 +186,8 @@ programs loaded:
 - `start-page.sh`, `transcribe.sh`, `speak.sh`, `setup.sh`, `llama-tts-serve.patch`.
 - `convert/`: the RunPod pipeline that converted both models, checked them against PyTorch, and
   published them.
+- `mobile/`: Klara mobile, an Android app (Expo / React Native) that runs Kreyòl speech to text
+  (Qwen3-ASR) and text to speech (Pocket TTS) on the phone itself. See `mobile/README.md`.
 
 Made by `setup.sh` or by the page, not in git:
 
