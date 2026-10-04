@@ -1,0 +1,11 @@
+# Models (~900 MB, on Hugging Face), the export environment and its outputs, and build output stay out of git.
+models/
+export/.venv/
+export/lomotron/
+export/kv/
+export/val/
+export/voices/
+*.log
+klara-mobile/android/
+klara-mobile/ios/
+klara-mobile/node_modules/

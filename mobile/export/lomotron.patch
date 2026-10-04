@@ -1,0 +1,31 @@
+diff --git a/scripts/export_flow_lm.py b/scripts/export_flow_lm.py
+index dd3043e..3565ce6 100644
+--- a/scripts/export_flow_lm.py
++++ b/scripts/export_flow_lm.py
+@@ -261,11 +261,11 @@ def main():
+     os.makedirs(args.output_dir, exist_ok=True)
+ 
+     print("Loading model...")
+-    tts = TTSModel.load_model(language=args.language, config=args.config).cpu().eval()
++    tts = TTSModel.load_model(language=(None if args.config else args.language), config=args.config).cpu().eval()
+     bundle_name = Path(args.config).stem if args.config is not None else args.language
+             
+     # Init patched state
+-    STATIC_SEQ_LEN = 1000
++    STATIC_SEQ_LEN = int(os.environ.get("POCKET_SEQ_LEN", "1000"))
+     state = init_states(tts.flow_lm, batch_size=1, sequence_length=STATIC_SEQ_LEN)
+     structure = get_state_structure(state)
+     flat_state = flatten_state(state)
+diff --git a/scripts/export_mimi_and_conditioner.py b/scripts/export_mimi_and_conditioner.py
+index 771cd62..6571555 100644
+--- a/scripts/export_mimi_and_conditioner.py
++++ b/scripts/export_mimi_and_conditioner.py
+@@ -535,7 +535,7 @@ def main():
+     parser.add_argument("--exact", action="store_true", help="Require exact torch vs ONNX equality.")
+     args = parser.parse_args()
+     
+-    flow, mimi, model = export_models(output_dir=args.output_dir, language=args.language, config=args.config)
++    flow, mimi, model = export_models(output_dir=args.output_dir, language=(None if args.config else args.language), config=args.config)
+     verify_export(flow, mimi, model, output_dir=args.output_dir, exact=args.exact)
+ 
+ if __name__ == "__main__":
